@@ -181,6 +181,22 @@ impl Shell {
         // Drain the save-before-home and recent-load requests.
         self.worker.call(|_| Ok(())).await.expect("state worker");
         settle(200).await;
+        // Model a retained failed save, including a provisional session ID.
+        let mut retained = record.clone();
+        retained.id = "provisional-removal-session".into();
+        self.unsaved
+            .borrow_mut()
+            .insert(retained.path.clone(), (0, retained));
+        self.storage_error("Retained snapshot could not be saved.");
+        self.render_home(&[record.clone()]);
+        checks["failed_save_recent_removal_clicked"] =
+            json!(click_button(&self.content(), "Remove from recents"));
+        self.worker.call(|_| Ok(())).await.expect("drain removal");
+        settle(200).await;
+        checks["recent_removal_cancels_retained_snapshot"] =
+            json!(!self.unsaved.borrow().contains_key(&record.path));
+        checks["recent_removal_clears_final_save_error"] =
+            json!(!self.object::<adw::Banner>("save_banner").is_revealed());
         record.path = directory.join("missing-recent.md");
         self.render_home(&[record.clone()]);
         checks["continue_card_can_remove_missing_document"] =
@@ -199,6 +215,68 @@ impl Shell {
             .expect("query removed recent");
         checks["continue_removal_hides_recent"] = json!(hidden);
         checks["continue_removal_keeps_bookmarks"] = json!(bookmarks == 1);
+
+        // Delay removal, then open a document before the callback is delivered.
+        self.render_home(&[record.clone()]);
+        let delay = self.worker.call(|_| {
+            std::thread::sleep(Duration::from_millis(200));
+            Ok(())
+        });
+        checks["delayed_recent_removal_clicked"] =
+            json!(click_button(&self.content(), "Remove from recents"));
+        let source = std::env::var_os("READERO_SMOKE_FILE")
+            .map(PathBuf::from)
+            .expect("source");
+        let source = if record.format == Format::Pdf {
+            let path = directory.join("recent-race.md");
+            std::fs::write(&path, "# Reading again\n\nA reading passage.").expect("race document");
+            path
+        } else {
+            source
+        };
+        self.open(source.clone());
+        delay.await.expect("delayed worker");
+        self.wait_ready().await;
+        settle(300).await;
+        checks["delayed_recent_removal_keeps_new_reader"] = json!(
+            self.record_for_save()
+                .is_some_and(|current| current.path == source.canonicalize().expect("source path"))
+                && self.content().visible_child_name().as_deref() == Some("reader")
+        );
+        self.worker.call(|_| Ok(())).await.expect("drain writes");
+        settle(100).await;
+        let database = directory.join("state/reading.sqlite3");
+        let lock = rusqlite::Connection::open(&database).expect("test database");
+        lock.execute_batch("BEGIN EXCLUSIVE")
+            .expect("lock database");
+        self.change_settings(|settings| settings.font_size = 23.0);
+        let unsaved = self.record_for_save().expect("reader before Home");
+        self.home();
+        self.worker
+            .call(|_| Ok(()))
+            .await
+            .expect("drain failed save");
+        settle(100).await;
+        checks["save_failure_after_home_is_visible"] =
+            json!(self.object::<adw::Banner>("save_banner").is_revealed());
+        checks["save_failure_after_home_keeps_snapshot"] =
+            json!(self.unsaved.borrow().contains_key(&unsaved.path));
+        lock.execute_batch("ROLLBACK").expect("unlock database");
+        self.save();
+        self.worker.call(|_| Ok(())).await.expect("drain retry");
+        settle(100).await;
+        let path = unsaved.path.clone();
+        let recovered = self
+            .worker
+            .call(move |store| store.document(&path))
+            .await
+            .expect("saved previous document");
+        checks["retry_from_home_recovers_previous_document"] = json!(
+            recovered.locator == unsaved.locator
+                && recovered.settings == unsaved.settings
+                && self.unsaved.borrow().is_empty()
+                && !self.object::<adw::Banner>("save_banner").is_revealed()
+        );
 
         // Exercise the actual fallback UUID and native Retry saving action.
         if record.format != Format::Pdf {
@@ -268,6 +346,61 @@ impl Shell {
         let Some(locator) = locator else {
             return json!({"initial_locator_available": false});
         };
+        let fixture_dir =
+            PathBuf::from(std::env::var_os("READERO_SMOKE_DIR").expect("smoke output"))
+                .join("invalid-opens");
+        std::fs::create_dir_all(&fixture_dir).expect("invalid open fixtures");
+        let generation = self.generation.get();
+        let record = self.record_for_save().expect("current session");
+        let original_back = self.back.borrow().clone();
+        let original_forward = self.forward.borrow().clone();
+        let original_sidebar = self.sidebar().reveals_child();
+        for (name, bytes) in [
+            ("unsupported.txt", &b"not a reading document"[..]),
+            ("empty.md", &b""[..]),
+            ("corrupt.epub", &b"not a zip archive"[..]),
+            ("corrupt.pdf", &b"not a PDF"[..]),
+        ] {
+            let path = fixture_dir.join(name);
+            std::fs::write(&path, bytes).expect("fixture");
+            self.open(path);
+            self.wait_ready().await;
+            checks[format!("failed_open_preserves_{name}")] = json!(
+                self.generation.get() == generation
+                    && self
+                        .record_for_save()
+                        .is_some_and(|current| current.id == record.id
+                            && current.locator == record.locator
+                            && current.settings == record.settings)
+                    && *self.back.borrow() == original_back
+                    && *self.forward.borrow() == original_forward
+                    && self.sidebar().reveals_child() == original_sidebar
+                    && self.content().visible_child_name().as_deref() == Some("reader")
+            );
+        }
+        // This archive passes native validation but fails during EPUB startup.
+        let broken = fixture_dir.join("broken-package.epub");
+        {
+            use std::io::Write;
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&broken).expect("zip"));
+            zip.start_file(
+                "META-INF/container.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .expect("container");
+            zip.write_all(b"<container/>").expect("bad container");
+            zip.finish().expect("finish zip");
+        }
+        self.open(broken);
+        self.wait_ready().await;
+        checks["renderer_failure_preserves_reader"] = json!(
+            !self.opening.get()
+                && self.generation.get() == generation
+                && self.content().visible_child_name().as_deref() == Some("reader")
+                && self.record_for_save().is_some_and(
+                    |current| current.id == record.id && current.locator == record.locator
+                )
+        );
         let kind = self.object::<gtk::DropDown>("sidebar_kind");
         let previous_kind = kind.selected();
         self.show_search();
@@ -417,6 +550,74 @@ impl Shell {
         self.push_history(original.locator.clone().expect("position"));
         let history_size = self.back.borrow().len();
         let mut checks = json!({});
+        for outcome in ["failure", "cancel", "invalid"] {
+            let generation = self.generation.get();
+            // Queue a reload first, then start the candidate before its async
+            // result can be delivered. No further file event rescues the reload.
+            self.reload(original.path.clone());
+            let delay = self.worker.call(|_| {
+                std::thread::sleep(Duration::from_millis(1200));
+                Ok(())
+            });
+            self.open(directory.join(if outcome == "invalid" {
+                "invalid-candidate.txt"
+            } else {
+                "missing-candidate.md"
+            }));
+            if outcome == "cancel" {
+                self.cancel_open();
+            }
+            delay.await.expect("delayed candidate");
+            for _ in 0..100 {
+                settle(100).await;
+                if self.generation.get() != generation {
+                    break;
+                }
+            }
+            self.wait_ready().await;
+            checks[format!("inflight_reload_recovers_{outcome}")] = json!(
+                self.generation.get() != generation
+                    && self.gate.borrow().accepts(self.generation.get())
+                    && self
+                        .record_for_save()
+                        .is_some_and(|r| r.path == original.path)
+            );
+        }
+        for cancel in [false, true] {
+            let generation = self.generation.get();
+            // Hold the candidate open across the watcher's debounce interval.
+            let delay = self.worker.call(|_| {
+                std::thread::sleep(Duration::from_millis(1800));
+                Ok(())
+            });
+            self.open(directory.join("missing-candidate.md"));
+            std::fs::write(&original.path, &source).expect("edit while opening");
+            settle(1100).await;
+            checks[format!("reload_waits_for_candidate_{cancel}")] = json!(
+                self.opening.get()
+                    && self.generation.get() == generation
+                    && self.reload_timer.borrow().is_some()
+            );
+            if cancel {
+                self.cancel_open();
+            }
+            delay.await.expect("delayed candidate");
+            for _ in 0..100 {
+                settle(100).await;
+                if self.generation.get() != generation {
+                    break;
+                }
+            }
+            self.wait_ready().await;
+            self.renderer_diagnostics().await;
+            checks[format!("deferred_reload_recovers_{cancel}")] = json!(
+                self.generation.get() != generation
+                    && self.gate.borrow().accepts(self.generation.get())
+                    && self
+                        .record_for_save()
+                        .is_some_and(|r| r.path == original.path)
+            );
+        }
         for atomic in [false, true] {
             let generation = self.generation.get();
             let surface = self.content().visible_child();
@@ -578,7 +779,7 @@ impl Shell {
     async fn wait_ready(&self) {
         for _ in 0..80 {
             settle(250).await;
-            if self.gate.borrow().accepts(self.generation.get()) {
+            if !self.opening.get() && self.gate.borrow().accepts(self.generation.get()) {
                 break;
             }
         }

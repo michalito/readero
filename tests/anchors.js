@@ -1,6 +1,6 @@
 // Run in the smoke build's private WebKit world, using the real DOM and CFI code.
 (async () => {
-  const { locatorFor, resolveLocator } = await import(
+  const { rangeAt, rangeRect, locatorFor, resolveLocator } = await import(
     "readero://app/anchors.js"
   );
   const CFI = await import("readero://app/foliate/epubcfi.js");
@@ -138,6 +138,31 @@
     reformattedRange.startContainer.textContent ===
       " passage continues here." &&
     reformattedRange.startOffset === 1;
+  // A standalone illustration can contain a caption far from the viewport.
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  const svgUrl = URL.createObjectURL(new Blob([
+    '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="4000"><rect width="400" height="4000" fill="gray"/><text x="20" y="80">Caption</text></svg>',
+  ], { type: "image/svg+xml" }));
+  try {
+    const loaded = new Promise(resolve => frame.onload = resolve);
+    frame.src = svgUrl;
+    await loaded;
+    const svgDoc = frame.contentDocument;
+    const rootRect = svgDoc.documentElement.getBoundingClientRect();
+    const positions = [0.25, 0.75].map(fraction => {
+      const range = rangeAt(svgDoc, 24, rootRect.top + fraction * rootRect.height);
+      const locator = locatorFor(book, 0, range);
+      return { range, locator, fraction };
+    });
+    checks.svg_caption_does_not_collapse_artwork_positions = positions.every(
+      ({ range, locator, fraction }) =>
+        !locator.cfi && !locator.quote &&
+        Math.abs(locator.fraction - fraction) < 0.001 &&
+        Math.abs(rangeRect(range).top - (rootRect.top + fraction * rootRect.height)) < 1 &&
+        resolveLocator(book, locator).anchor(svgDoc) === fraction,
+    );
+  } finally { frame.remove(); URL.revokeObjectURL(svgUrl); }
   globalThis.readeroAnchorChecks = checks;
 })().catch((error) => {
   globalThis.readeroAnchorChecks = { error: String(error) };

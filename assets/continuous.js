@@ -44,7 +44,7 @@ export class Continuous extends EventTarget {
     const item =
       mounted.find((item) => item.frame.getBoundingClientRect().bottom > top) ??
       mounted.at(-1);
-    if (!item?.frame.contentDocument?.body) return null;
+    if (!item?.frame.contentDocument?.documentElement) return null;
     const rect = item.frame.getBoundingClientRect();
     const range = rangeAt(
       item.frame.contentDocument,
@@ -132,30 +132,43 @@ export class Continuous extends EventTarget {
     this.compensate();
     if (!(await loaded) || this.disposed) return;
     const doc = iframe.contentDocument;
-    if (!doc?.body) throw new Error("This chapter has no readable content.");
-    const css = doc.createElement("style");
+    const root = doc?.body ?? doc?.documentElement;
+    if (!root) throw new Error("This chapter has no readable content.");
+    const svg = root.namespaceURI === "http://www.w3.org/2000/svg";
+    const css = doc.createElementNS(
+      svg ? root.namespaceURI : "http://www.w3.org/1999/xhtml",
+      "style",
+    );
     css.textContent = this.style;
-    doc.head.append(css);
+    (doc.head ?? root).append(css);
     item.css = css;
     doc.documentElement.style.setProperty("overflow", "hidden", "important");
-    doc.body.style.setProperty("margin", "0", "important");
+    root.style.setProperty("margin", "0", "important");
+    // SVG documents have no body. Fit their intrinsic aspect ratio to the
+    // chapter width instead of measuring a viewport-dependent scrollHeight.
+    const box = svg ? root.viewBox.baseVal : null;
+    const width = box?.width || (svg && root.width.baseVal.value) || 300;
+    const height = box?.height || (svg && root.height.baseVal.value) || 150;
+    if (svg) {
+      root.style.setProperty("width", "100%", "important");
+      root.style.setProperty("height", "100%", "important");
+    }
     const size = () => {
       if (this.disposed) return;
       this.compensate();
-      const height = Math.ceil(
-        Math.max(
-          doc.body.scrollHeight,
-          doc.body.getBoundingClientRect().height,
-        ),
+      const measured = Math.ceil(
+        svg
+          ? (iframe.getBoundingClientRect().width * height) / width
+          : Math.max(root.scrollHeight, root.getBoundingClientRect().height),
       );
-      if (Math.abs(iframe.getBoundingClientRect().height - height) > 1)
-        iframe.style.height = `${Math.max(1, height)}px`;
+      if (Math.abs(iframe.getBoundingClientRect().height - measured) > 1)
+        iframe.style.height = `${Math.max(1, measured)}px`;
       // Browser clamping caused by our resize is not a reader scroll.
       if (this.anchor) this.anchor.scrollTop = this.element.scrollTop;
       this.compensate();
     };
     item.observer = new ResizeObserver(size);
-    item.observer.observe(doc.body);
+    item.observer.observe(root);
     await Promise.race([
       doc.fonts.ready,
       new Promise((r) => setTimeout(r, 1500)),

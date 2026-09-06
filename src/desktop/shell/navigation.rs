@@ -58,6 +58,8 @@ impl Shell {
     }
 
     pub(super) fn history(self: &Rc<Self>, forward: bool) {
+        let original_back = self.back.borrow().clone();
+        let original_forward = self.forward.borrow().clone();
         let target = if forward {
             self.forward.borrow_mut().pop()
         } else {
@@ -100,8 +102,9 @@ impl Shell {
             let forward = self.forward.take();
             self.open(target.path.clone());
             self.pending_location.replace(Some(target));
-            self.back.replace(back);
-            self.forward.replace(forward);
+            self.pending_history.replace(Some((back, forward)));
+            self.back.replace(original_back);
+            self.forward.replace(original_forward);
         }
     }
 
@@ -371,7 +374,7 @@ impl Shell {
         {
             let path = root.join(relative);
             if path.canonicalize().is_ok_and(|p| p.starts_with(&root)) {
-                let mut back = self.back.take();
+                let mut back = self.back.borrow().clone();
                 if let Some(record) = self.record_for_save()
                     && let Some(locator) = record.locator
                 {
@@ -386,7 +389,7 @@ impl Shell {
                     self.pending_href
                         .replace(Some(format!("content.xhtml#{fragment}")));
                 }
-                self.back.replace(back);
+                self.pending_history.replace(Some((back, Vec::new())));
             }
         }
     }

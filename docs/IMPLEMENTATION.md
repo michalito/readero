@@ -17,7 +17,7 @@ The [PRD](MVP_PRD.md) remains the acceptance baseline. This preview is ready for
 - `desktop/pdf.rs` adapts Papers models, native page coordinates, async loading, search, and settled restoration.
 - `desktop/reflow.rs` owns WebKit setup, local resource delivery, lifecycle cancellation, and typed messages. The native bridge exists only in a named script world.
 - `desktop/shell.rs` coordinates a single active document; controls, home, navigation, and persistence live in separate modules.
-- `assets/reader.js`, `continuous.js`, and `anchors.js` own reflow presentation and passage capture/restoration. Continuous reading keeps at most five neighboring chapter frames, including during replacement loads. Pinned upstream foliate-js and Papers bindings remain unmodified.
+- `assets/reader.js`, `continuous.js`, and `anchors.js` own reflow presentation and passage capture/restoration. Continuous reading keeps at most five neighboring chapter frames, including during replacement loads. The pinned foliate-js paginator has a local patch for standalone SVG spine documents: body-free DOM access and a single fitted page. Papers bindings remain unmodified.
 
 Native calls remain on the GTK thread except work dispatched through Papers' scheduler. ZIP/Markdown resource work uses background tasks. PDFs have a 64 MiB page cache; reflow resources are tied to the active document. Search is incremental and capped at 500 displayed matches. Save events coalesce at 750 ms with a two-second maximum requested interval; closing awaits a settled renderer checkpoint and the final save, with a visible failure and a choice to keep the window open. The checkpoint has a three-second deadline.
 

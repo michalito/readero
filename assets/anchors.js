@@ -1,6 +1,18 @@
 import * as CFI from "./foliate/epubcfi.js";
 
+// Geometric anchors retain a proportional point within standalone SVG artwork.
+const svgPositions = new WeakMap();
+
 export function rangeAt(doc, x = 24, y = 24) {
+  const root = doc.documentElement;
+  if (root?.localName === "svg") {
+    const range = doc.createRange();
+    range.selectNodeContents(root);
+    const rect = root.getBoundingClientRect();
+    if (rect.height)
+      svgPositions.set(range, Math.max(0, Math.min(1, (y - rect.top) / rect.height)));
+    return range;
+  }
   const range = doc.caretRangeFromPoint?.(x, Math.max(1, y));
   if (
     range?.startContainer.nodeType === Node.TEXT_NODE &&
@@ -10,12 +22,16 @@ export function rangeAt(doc, x = 24, y = 24) {
     if (rect?.height && rect.bottom >= y - 2 && rect.top <= y + 60)
       return range;
   }
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) =>
-      node.textContent.trim() && !node.parentElement.closest("script,style")
-        ? NodeFilter.FILTER_ACCEPT
-        : NodeFilter.FILTER_REJECT,
-  });
+  const walker = doc.createTreeWalker(
+    doc.body ?? doc.documentElement,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode: (node) =>
+        node.textContent.trim() && !node.parentElement.closest("script,style")
+          ? NodeFilter.FILTER_ACCEPT
+          : NodeFilter.FILTER_REJECT,
+    },
+  );
   let node,
     last = null;
   while ((node = walker.nextNode())) {
@@ -106,7 +122,7 @@ function matchesQuote(range, locator, doc) {
   if (!locator.quote) return true; // Legacy locators may have no quote.
   const point = textPoint(range);
   if (!point) return false;
-  const index = textIndex(doc.body);
+  const index = textIndex(doc.body ?? doc.documentElement);
   const offset = index.offsets.get(point.node);
   if (offset === undefined) return false;
   const start = offset + point.offset - (locator.quote_offset ?? 0);
@@ -119,9 +135,11 @@ function matchesQuote(range, locator, doc) {
 
 export function locatorFor(book, index, range, fraction = 0) {
   if (!range || !book.sections[index]) return null;
+  fraction = svgPositions.get(range) ?? fraction;
   const anchor = range.cloneRange();
   anchor.collapse(true);
-  const point = textPoint(anchor);
+  const point = anchor.startContainer.localName === "svg"
+    ? null : textPoint(anchor);
   const element =
     anchor.startContainer.nodeType === Node.ELEMENT_NODE
       ? anchor.startContainer
@@ -137,7 +155,8 @@ export function locatorFor(book, index, range, fraction = 0) {
     if (/[\uDC00-\uDFFF]/.test(point.node.textContent[end] ?? "")) end++;
     quote = point.node.textContent.slice(begin, end);
     quoteOffset = point.offset - begin;
-    const documentIndex = textIndex(point.node.ownerDocument.body);
+    const doc = point.node.ownerDocument;
+    const documentIndex = textIndex(doc.body ?? doc.documentElement);
     const position = documentIndex.offsets.get(point.node);
     if (position !== undefined && documentIndex.length)
       fraction = (position + point.offset) / documentIndex.length;
@@ -150,7 +169,12 @@ export function locatorFor(book, index, range, fraction = 0) {
     version: 1,
     kind: "reflow",
     href: book.sections[index].id,
-    cfi: CFI.joinIndir(book.sections[index].cfi, CFI.fromRange(anchor)),
+    // Root-level SVG anchors represent a geometric position, which a CFI
+    // cannot encode. Persist the section and proportional position instead.
+    cfi:
+      anchor.startContainer === anchor.startContainer.ownerDocument?.documentElement
+        ? ""
+        : CFI.joinIndir(book.sections[index].cfi, CFI.fromRange(anchor)),
     section: index,
     fraction: Math.max(0, Math.min(1, fraction || 0)),
     quote,
@@ -186,6 +210,10 @@ export function resolveLocator(book, locator, changed = false) {
     index,
     recovery: "cfi",
     anchor: (doc) => {
+      if (doc.documentElement.localName === "svg" && !locator.cfi && !locator.quote) {
+        result.recovery = "fraction";
+        return Math.max(0, Math.min(1, locator.fraction || 0));
+      }
       const block = locator.block ? doc.getElementById(locator.block) : null;
       if (!changed && resolved?.index === index) {
         try {
@@ -212,21 +240,24 @@ export function resolveLocator(book, locator, changed = false) {
           : block;
       }
       if (locator.quote) {
-        const text = textIndex(doc.body)
+        const text = textIndex(doc.body ?? doc.documentElement)
           .entries.map(({ node }) => node.textContent)
           .join("");
         const offset = text.indexOf(locator.quote);
         if (offset >= 0 && text.indexOf(locator.quote, offset + 1) < 0) {
           result.recovery = "quote";
-          return rangeInBlock(doc.body, offset + (locator.quote_offset ?? 0));
+          return rangeInBlock(
+            doc.body ?? doc.documentElement,
+            offset + (locator.quote_offset ?? 0),
+          );
         }
       }
       result.recovery = "approximate";
       // A text fraction provides a nearby passage after a destructive edit.
-      const text = textIndex(doc.body);
+      const text = textIndex(doc.body ?? doc.documentElement);
       if (text.length)
         return rangeInBlock(
-          doc.body,
+          doc.body ?? doc.documentElement,
           Math.floor(text.length * (locator.fraction || 0)),
         );
       return Math.max(0, Math.min(1, locator.fraction || 0));
@@ -236,6 +267,11 @@ export function resolveLocator(book, locator, changed = false) {
 }
 
 export function rangeRect(anchor) {
+  const fraction = svgPositions.get(anchor);
+  if (fraction !== undefined) {
+    const rect = anchor.startContainer.getBoundingClientRect();
+    return new DOMRect(rect.left, rect.top + fraction * rect.height, rect.width, 1);
+  }
   if (typeof anchor?.cloneRange === "function") {
     const rect = anchor.getBoundingClientRect();
     if (rect.height) return rect;

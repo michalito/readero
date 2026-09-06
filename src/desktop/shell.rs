@@ -53,6 +53,12 @@ pub struct Shell {
     ui: gtk::Builder,
     worker: StateWorker,
     generation: Cell<u64>,
+    open_serial: Cell<u64>,
+    opening: Cell<bool>,
+    pending_reader: RefCell<Option<(DocumentRecord, Reflow)>>,
+    pending_history: RefCell<Option<(Vec<HistoryEntry>, Vec<HistoryEntry>)>>,
+    unsaved: RefCell<std::collections::HashMap<PathBuf, (u64, DocumentRecord)>>,
+    save_serial: Cell<u64>,
     gate: RefCell<SaveGate>,
     current: RefCell<Option<DocumentRecord>>,
     surface: RefCell<Option<Surface>>,
@@ -99,6 +105,12 @@ impl Shell {
             ui,
             worker: StateWorker::start(data.join("reading.sqlite3")),
             generation: Cell::new(0),
+            open_serial: Cell::new(0),
+            opening: Cell::new(false),
+            pending_reader: RefCell::new(None),
+            pending_history: RefCell::new(None),
+            unsaved: RefCell::new(std::collections::HashMap::new()),
+            save_serial: Cell::new(0),
             gate: RefCell::new(SaveGate::default()),
             current: RefCell::new(None),
             surface: RefCell::new(None),
@@ -171,6 +183,12 @@ impl Shell {
     }
 
     fn reload(self: &Rc<Self>, path: PathBuf) {
+        if self.opening.get() {
+            // Keep the change queued until the candidate either commits (and
+            // disposes this timer) or fails/cancels, restoring this reader.
+            self.schedule_reload(path);
+            return;
+        }
         let generation = self.generation.get();
         let serial = self.reload_serial.get() + 1;
         self.reload_serial.set(serial);
@@ -178,12 +196,19 @@ impl Shell {
         glib::MainContext::default().spawn_local(async move {
             // Validate first. Empty, missing or partly written files leave the
             // current reader, save gate and directory watcher usable.
+            let input = path.clone();
             let result =
-                gio::spawn_blocking(move || Publication::open(&path, Format::Markdown)).await;
+                gio::spawn_blocking(move || Publication::open(&input, Format::Markdown)).await;
             let Some(s) = weak.upgrade() else {
                 return;
             };
             if !s.is_current(generation) || s.reload_serial.get() != serial {
+                return;
+            }
+            // A candidate may have started during Publication::open. Keep the
+            // current reader's update pending until that candidate resolves.
+            if s.opening.get() {
+                s.schedule_reload(path);
                 return;
             }
             let publication = match result {
@@ -201,6 +226,7 @@ impl Shell {
             let Some(record) = s.record_for_save().or_else(|| s.current.borrow().clone()) else {
                 return;
             };
+            s.cancel_open();
             s.save();
             let sidebar = s.sidebar().reveals_child();
             s.dispose_reader();
@@ -215,83 +241,81 @@ impl Shell {
     }
 
     fn open_document(self: &Rc<Self>, path: PathBuf) {
-        self.save();
-        if self.focus.get() {
-            self.toggle_focus();
-        }
-        self.dispose_surface();
-        let generation = self.gate.borrow_mut().begin();
-        self.generation.set(generation);
-        self.current.replace(None);
-        self.pending_location.replace(None);
-        self.pending_sidebar.set(None);
-        self.pending_href.replace(None);
-        self.back.borrow_mut().clear();
-        self.forward.borrow_mut().clear();
-        self.toc.borrow_mut().clear();
-        self.set_reading(false);
+        self.cancel_open();
+        let serial = self.open_serial.get();
         if let Err(error) = Format::from_path(&path) {
-            self.error(&error.to_string());
+            self.open_error(&error.to_string());
             return;
         }
-        self.show_status("Opening your document…", "", true);
+        self.opening.set(true);
+        self.save();
+        if self.surface.borrow().is_none() {
+            self.show_status("Opening your document…", "", true);
+        }
         let weak = Rc::downgrade(self);
         let input = path.clone();
         let pending = self.worker.call(move |store| store.document(&input));
         glib::MainContext::default().spawn_local(async move {
             let loaded = pending.await;
             let Some(shell) = weak.upgrade() else { return; };
-            if !shell.is_current(generation) { return; }
+            if !shell.is_open(serial) { return; }
             let mut record = match loaded {
                 Ok(record) => record,
                 Err(error) if path.is_file() => {
-                    shell.storage_error(&error.to_string());
                     match DocumentRecord::new(path) {
-                        Ok(record) => record,
-                        Err(error) => { shell.error(&error.to_string()); return; }
+                        Ok(record) => {
+                            shell.storage_error(&error.to_string());
+                            record
+                        },
+                        Err(error) => { shell.open_error(&error.to_string()); return; }
                     }
                 }
                 Err(_) => {
-                    shell.error("This document could not be found. Return to reading home to locate its new location.");
+                    shell.open_error("This document could not be found. Return to reading home to locate its new location.");
                     return;
                 }
             };
+            if let Some((_, unsaved)) = shell.unsaved.borrow().get(&record.path) {
+                record.locator = unsaved.locator.clone();
+                record.settings = unsaved.settings.clone();
+            }
             if let Some(target)=shell.pending_location.borrow_mut().take() && target.path==record.path {
                 record.locator=Some(target.locator);record.settings=target.settings;
             }
-            shell.current.replace(Some(record.clone()));
             if record.format == Format::Pdf {
-                shell.load_pdf(record, generation);
+                shell.load_pdf(record, serial);
                 return;
             }
             let path = record.path.clone();
             let format = record.format;
             let result = gio::spawn_blocking(move || Publication::open(&path, format)).await;
-            if !shell.is_current(generation) { return; }
+            if !shell.is_open(serial) { return; }
             match result {
-                Ok(Ok(publication)) => shell.mount_reflow(publication, record, generation),
-                Ok(Err(error)) => shell.error(&error.to_string()),
-                Err(_) => shell.error("The document worker stopped. Try opening the file again."),
+                Ok(Ok(publication)) => shell.stage_reflow(publication, record, serial),
+                Ok(Err(error)) => shell.open_error(&error.to_string()),
+                Err(_) => shell.open_error("The document worker stopped. Try opening the file again."),
             }
         });
     }
 
-    fn load_pdf(self: &Rc<Self>, record: DocumentRecord, generation: u64) {
+    fn load_pdf(self: &Rc<Self>, record: DocumentRecord, serial: u64) {
         let weak = Rc::downgrade(self);
         let path = record.path.clone();
         let job = pdf::load(&path, move |result, supplied_password| {
             let Some(s) = weak.upgrade() else {
                 return;
             };
-            if !s.is_current(generation) {
+            if !s.is_open(serial) {
                 return;
             }
             match result {
                 Ok(doc) => {
                     if doc.n_pages() <= 0 {
-                        s.error("This PDF has no readable pages.");
+                        s.open_error("This PDF has no readable pages.");
                         return;
                     }
+                    s.job.borrow_mut().take();
+                    let generation = s.commit_open(record.clone());
                     let weak = Rc::downgrade(&s);
                     let pdf = Pdf::new(&doc, &record.settings, move |locator, label| {
                         if let Some(s) = weak.upgrade()
@@ -366,12 +390,121 @@ impl Shell {
                     outlines.scheduler_push_job(papers_view::JobPriority::PriorityLow);
                 }
                 Err(error) if error.matches(papers_document::DocumentError::Encrypted) => {
-                    s.password(generation, supplied_password)
+                    s.password(serial, supplied_password)
                 }
-                Err(error) => s.error(&error.to_string()),
+                Err(error) => s.open_error(&error.to_string()),
             }
         });
         self.job.replace(Some(job));
+    }
+
+    // Opening has its own serial: the current reader keeps accepting position
+    // updates until the candidate has successfully initialized.
+    fn is_open(&self, serial: u64) -> bool {
+        self.open_serial.get() == serial && !self.closing.get()
+    }
+
+    fn cancel_open(&self) {
+        self.opening.set(false);
+        self.open_serial.set(self.open_serial.get() + 1);
+        if let Some(job) = self.job.borrow_mut().take() {
+            job.cancel();
+        }
+        if let Some((_, reader)) = self.pending_reader.borrow_mut().take() {
+            reader.close();
+            self.content().remove(&reader.view);
+            if self.surface.borrow().is_some() {
+                self.content().set_visible_child_name("reader");
+            }
+        }
+        self.pending_location.take();
+        self.pending_href.take();
+        self.pending_history.take();
+    }
+
+    fn open_error(&self, message: &str) {
+        self.cancel_open();
+        if self.surface.borrow().is_some() {
+            self.content().set_visible_child_name("reader");
+            self.toast(&format!("Couldn’t open this document. {message}"));
+        } else {
+            self.error(message);
+        }
+    }
+
+    fn commit_open(self: &Rc<Self>, record: DocumentRecord) -> u64 {
+        self.opening.set(false);
+        self.save();
+        if self.focus.get() {
+            self.toggle_focus();
+        }
+        self.dispose_surface();
+        let generation = self.gate.borrow_mut().begin();
+        self.generation.set(generation);
+        self.current.replace(Some(record));
+        self.pending_sidebar.set(None);
+        if let Some((back, forward)) = self.pending_history.take() {
+            self.back.replace(back);
+            self.forward.replace(forward);
+        } else {
+            self.back.borrow_mut().clear();
+            self.forward.borrow_mut().clear();
+        }
+        self.toc.borrow_mut().clear();
+        self.set_reading(false);
+        generation
+    }
+
+    fn stage_reflow(
+        self: &Rc<Self>,
+        publication: Publication,
+        mut record: DocumentRecord,
+        serial: u64,
+    ) {
+        let changed = !record.revision.is_empty() && record.revision != publication.revision;
+        record.revision = publication.revision.clone();
+        let committed = Cell::new(None);
+        let notices = RefCell::new(Vec::<String>::new());
+        let weak = Rc::downgrade(self);
+        let reader = Reflow::new(publication, &record, serial, changed, move |mut message| {
+            let Some(s) = weak.upgrade() else {
+                return;
+            };
+            if let Some(generation) = committed.get() {
+                message.generation = generation;
+                s.web_message(message);
+                return;
+            }
+            if !s.is_open(serial) {
+                return;
+            }
+            match &message.event {
+                reflow::Event::Ready { .. } => {
+                    let pending = s.pending_reader.borrow_mut().take();
+                    let Some((record, reader)) = pending else {
+                        return;
+                    };
+                    let generation = s.commit_open(record);
+                    committed.set(Some(generation));
+                    s.content().remove(&reader.view);
+                    s.content().add_named(&reader.view, Some("reader"));
+                    s.content().set_visible_child_name("reader");
+                    s.surface.replace(Some(Surface::Reflow(reader)));
+                    message.generation = generation;
+                    s.web_message(message);
+                    for message in notices.take() {
+                        s.toast(&message);
+                    }
+                }
+                reflow::Event::Error { message } => s.open_error(message),
+                reflow::Event::Notice { message } => notices.borrow_mut().push(message.clone()),
+                _ => {}
+            }
+        });
+        self.content().add_named(&reader.view, Some("candidate"));
+        self.pending_reader.replace(Some((record, reader)));
+        // Map the candidate so WebKit can finish real layout before committing.
+        self.content().set_visible_child_name("candidate");
     }
 
     fn mount_reflow(
@@ -563,10 +696,44 @@ impl Shell {
             {
                 if let Some(id) = relink {
                     let worker = s.worker.clone();
+                    let mut snapshots = s.unsaved.borrow().values().cloned().collect::<Vec<_>>();
+                    snapshots.sort_by_key(|(serial, _)| *serial);
+                    let snapshots = snapshots
+                        .into_iter()
+                        .map(|(_, record)| record)
+                        .collect::<Vec<_>>();
                     glib::MainContext::default().spawn_local(async move {
                         let p = path.clone();
-                        match worker.call(move |store| store.relink(&id, &p)).await {
-                            Ok(_) => s.open(path),
+                        match worker
+                            .call(move |store| store.relink_sessions(&id, &p, &snapshots))
+                            .await
+                        {
+                            Ok((record, session_ids)) => {
+                                let mut unsaved = s.unsaved.borrow_mut();
+                                let mut rebound = Vec::new();
+                                unsaved.retain(|_, (serial, snapshot)| {
+                                    if snapshot.id == record.id
+                                        || session_ids.contains(&snapshot.id)
+                                    {
+                                        snapshot.id = record.id.clone();
+                                        snapshot.path = record.path.clone();
+                                        rebound.push((*serial, snapshot.clone()));
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                });
+                                for snapshot in rebound {
+                                    let entry = unsaved
+                                        .entry(record.path.clone())
+                                        .or_insert_with(|| snapshot.clone());
+                                    if entry.0 < snapshot.0 {
+                                        *entry = snapshot;
+                                    }
+                                }
+                                drop(unsaved);
+                                s.open(path);
+                            }
                             Err(error) => s.toast(&error.to_string()),
                         }
                     });
@@ -577,7 +744,7 @@ impl Shell {
         });
     }
 
-    fn password(self: &Rc<Self>, generation: u64, incorrect: bool) {
+    fn password(self: &Rc<Self>, serial: u64, incorrect: bool) {
         let dialog = adw::AlertDialog::builder()
             .heading("Unlock this PDF")
             .body(if incorrect {
@@ -599,7 +766,7 @@ impl Shell {
         let weak = Rc::downgrade(self);
         dialog.connect_response(None, move |_, response| {
             if let Some(s) = weak.upgrade() {
-                if !s.is_current(generation) {
+                if !s.is_open(serial) {
                     return;
                 }
                 if response == "unlock" {
@@ -613,7 +780,10 @@ impl Shell {
                         job.scheduler_push_job(papers_view::JobPriority::PriorityUrgent);
                     }
                 } else {
-                    s.home();
+                    s.cancel_open();
+                    if s.surface.borrow().is_none() {
+                        s.home();
+                    }
                 }
             }
         });

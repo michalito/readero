@@ -119,13 +119,13 @@ const getVisibleRange = (doc, start, end, mapRect) => {
         }
         return FILTER_SKIP
     }
-    const walker = doc.createTreeWalker(doc.body, filter, { acceptNode })
+    const walker = doc.createTreeWalker(doc.body ?? doc.documentElement, filter, { acceptNode })
     const nodes = []
     for (let node = walker.nextNode(); node; node = walker.nextNode())
         nodes.push(node)
 
     // we're only interested in the first and last visible nodes
-    const from = nodes[0] ?? doc.body
+    const from = nodes[0] ?? (doc.body ?? doc.documentElement)
     const to = nodes[nodes.length - 1] ?? from
 
     // find the offset at which visibility changes
@@ -177,17 +177,17 @@ const setSelectionTo = (target, collapse) => {
 
 const getDirection = doc => {
     const { defaultView } = doc
-    const { writingMode, direction } = defaultView.getComputedStyle(doc.body)
+    const { writingMode, direction } = defaultView.getComputedStyle(doc.body ?? doc.documentElement)
     const vertical = writingMode === 'vertical-rl'
         || writingMode === 'vertical-lr'
-    const rtl = doc.body.dir === 'rtl'
+    const rtl = (doc.body ?? doc.documentElement).dir === 'rtl'
         || direction === 'rtl'
         || doc.documentElement.dir === 'rtl'
     return { vertical, rtl }
 }
 
 const getBackground = doc => {
-    const bodyStyle = doc.defaultView.getComputedStyle(doc.body)
+    const bodyStyle = doc.defaultView.getComputedStyle(doc.body ?? doc.documentElement)
     return bodyStyle.backgroundColor === 'rgba(0, 0, 0, 0)'
         && bodyStyle.backgroundImage === 'none'
         ? doc.defaultView.getComputedStyle(doc.documentElement).background
@@ -266,11 +266,11 @@ class View {
                 this.#vertical = vertical
                 this.#rtl = rtl
 
-                this.#contentRange.selectNodeContents(doc.body)
+                this.#contentRange.selectNodeContents(doc.body ?? doc.documentElement)
                 const layout = beforeRender?.({ vertical, rtl, background })
                 this.#iframe.style.display = 'block'
                 this.render(layout)
-                this.#observer.observe(doc.body)
+                this.#observer.observe(doc.body ?? doc.documentElement)
 
                 // the resize observer above doesn't work in Firefox
                 // (see https://bugzilla.mozilla.org/show_bug.cgi?id=1832939)
@@ -299,7 +299,7 @@ class View {
             'height': 'auto',
             'width': 'auto',
         })
-        setStylesImportant(doc.body, {
+        setStylesImportant(doc.body ?? doc.documentElement, {
             [vertical ? 'max-height' : 'max-width']: `${columnWidth}px`,
             'margin': 'auto',
         })
@@ -311,6 +311,24 @@ class View {
         this.#size = vertical ? height : width
 
         const doc = this.document
+        // A standalone SVG is a replaced graphic, not a column container.
+        // Keep its original DOM (and CFIs) and fit it on one page.
+        if (doc.documentElement.localName === 'svg') {
+            const svg = doc.documentElement
+            if (!svg.hasAttribute('viewBox')) {
+                const w = svg.width.baseVal.value || 300
+                const h = svg.height.baseVal.value || 150
+                svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
+            }
+            setStylesImportant(doc.documentElement, {
+                'box-sizing': 'border-box',
+                'width': `${width}px`, 'height': `${height}px`,
+                'padding': `0 ${gap / 2}px`,
+                'overflow': 'hidden', 'margin': '0',
+            })
+            this.expand()
+            return
+        }
         setStylesImportant(doc.documentElement, {
             'box-sizing': 'border-box',
             'column-width': `${Math.trunc(columnWidth)}px`,
@@ -330,7 +348,7 @@ class View {
             // fix glyph clipping in WebKit
             '-webkit-line-box-contain': 'block glyphs replaced',
         })
-        setStylesImportant(doc.body, {
+        setStylesImportant(doc.body ?? doc.documentElement, {
             'max-height': 'none',
             'max-width': 'none',
             'margin': '0',
@@ -342,7 +360,7 @@ class View {
         const { width, height, margin } = this.#layout
         const vertical = this.#vertical
         const doc = this.document
-        for (const el of doc.body.querySelectorAll('img, svg, video')) {
+        for (const el of (doc.body ?? doc.documentElement).querySelectorAll('img, svg, video')) {
             // preserve max size if they are already set
             const { maxHeight, maxWidth } = doc.defaultView.getComputedStyle(el)
             setStylesImportant(el, {
@@ -371,7 +389,8 @@ class View {
             const contentStart = this.#vertical ? 0
                 : this.#rtl ? rootRect.right - contentRect.right : contentRect.left - rootRect.left
             const contentSize = contentStart + contentRect[side]
-            const pageCount = Math.ceil(contentSize / this.#size)
+            const pageCount = documentElement.localName === 'svg'
+                ? 1 : Math.ceil(contentSize / this.#size)
             const expandedSize = pageCount * this.#size
             this.#element.style.padding = '0'
             this.#iframe.style[side] = `${expandedSize}px`
@@ -416,7 +435,7 @@ class View {
         return this.#overlayer
     }
     destroy() {
-        if (this.document) this.#observer.unobserve(this.document.body)
+        if (this.document) this.#observer.unobserve(this.document.body ?? this.document.documentElement)
     }
 }
 

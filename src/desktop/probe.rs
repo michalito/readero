@@ -106,7 +106,7 @@ impl Shell {
     async fn probe_ready(&self) {
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
-            if self.gate.borrow().accepts(self.generation.get()) {
+            if !self.opening.get() && self.gate.borrow().accepts(self.generation.get()) {
                 let (view, pdf) = match self.surface.borrow().as_ref() {
                     Some(Surface::Reflow(reader)) => (Some(reader.view.clone()), false),
                     Some(Surface::Pdf(_)) => (None, true),

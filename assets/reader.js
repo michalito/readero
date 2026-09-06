@@ -7,7 +7,7 @@ import {
   handlesOwnKeys,
 } from "./interaction.js";
 import { locatorFor, resolveLocator, rangeRect } from "./anchors.js";
-import { searchRanges } from "./search.js";
+import { searchBook } from "./search.js";
 
 const nextFrame = () =>
   new Promise((resolve) => requestAnimationFrame(resolve));
@@ -309,35 +309,18 @@ export async function start(config, nativeSend) {
       });
   }
   async function search(query) {
-    const generation = ++searchGeneration,
-      items = [];
-    if (!query.trim()) {
-      send({ type: "search", query, items, complete: true });
-      return;
-    }
-    for (let index = 0; index < book.sections.length; index++) {
-      if (generation !== searchGeneration || disposed) return;
-      const doc = await book.sections[index].createDocument();
-      if (generation !== searchGeneration || disposed) return;
-      if (!doc?.body) continue;
-      const matches = await searchRanges(
-        doc,
-        query,
-        500 - items.length,
-        () => generation !== searchGeneration || disposed,
-      );
-      if (generation !== searchGeneration || disposed) return;
-      for (const { label, range } of matches)
-        items.push({ label, locator: locatorFor(book, index, range) });
-      send({
-        type: "search",
-        query,
-        items: items.slice(),
-        complete: index === book.sections.length - 1 || items.length >= 500,
-      });
-      if (items.length >= 500) break;
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
+    const generation = ++searchGeneration;
+    return searchBook(
+      book,
+      query,
+      send,
+      () => generation !== searchGeneration || disposed,
+      () =>
+        send({
+          type: "notice",
+          message: "Some sections could not be searched.",
+        }),
+    );
   }
   const command = async (message) => {
     switch (message.type) {
@@ -404,8 +387,11 @@ export async function start(config, nativeSend) {
         .getContents()
         .find((item) => item.index === target.index);
       if (!content) return false;
-      const anchor = target.anchor(content.doc),
-        rect = rangeRect(anchor);
+      const anchor = target.anchor(content.doc);
+      const bounds = content.doc.documentElement.getBoundingClientRect();
+      const rect = typeof anchor === "number"
+        ? new DOMRect(bounds.left, bounds.top + anchor * bounds.height, bounds.width, 1)
+        : rangeRect(anchor);
       const frame =
         content.doc.defaultView.frameElement.getBoundingClientRect();
       const viewport = root.getBoundingClientRect();

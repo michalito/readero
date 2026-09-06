@@ -34,6 +34,7 @@ impl Shell {
     }
 
     pub(super) fn home(self: &Rc<Self>) {
+        self.cancel_open();
         self.save();
         self.dispose_surface();
         self.current.replace(None);
@@ -46,6 +47,7 @@ impl Shell {
         self.set_reading(false);
         self.window.set_title(Some("Readero"));
         self.render_home(&[]);
+        let serial = self.open_serial.get();
         let worker = self.worker.clone();
         let weak = Rc::downgrade(self);
         glib::MainContext::default().spawn_local(async move {
@@ -53,7 +55,7 @@ impl Shell {
             let Some(s) = weak.upgrade() else {
                 return;
             };
-            if !s.is_current(generation) {
+            if !s.is_current(generation) || !s.is_open(serial) {
                 return;
             }
             match result {
@@ -139,7 +141,7 @@ impl Shell {
                 .margin_top(8)
                 .css_classes(["suggested-action", "home-open"])
                 .build();
-            let remove = self.remove_recent_button(record.id.clone());
+            let remove = self.remove_recent_button(record.id.clone(), record.path.clone());
             let record = record.clone();
             let weak = Rc::downgrade(self);
             button.connect_clicked(move |_| {
@@ -240,7 +242,7 @@ impl Shell {
                     }
                 });
                 row.append(&open);
-                let remove = self.remove_recent_button(record.id);
+                let remove = self.remove_recent_button(record.id, record.path);
                 row.append(&remove);
                 list.append(&row);
             }
@@ -251,20 +253,51 @@ impl Shell {
         self.content().add_named(&scroll, Some("home"));
         self.content().set_visible_child_name("home");
     }
-    fn remove_recent_button(self: &Rc<Self>, id: String) -> gtk::Button {
+    fn remove_recent_button(self: &Rc<Self>, id: String, path: PathBuf) -> gtk::Button {
         let remove = icon_button("list-remove-symbolic", "Remove from recents");
         let worker = self.worker.clone();
         let weak = Rc::downgrade(self);
+        let generation = self.generation.get();
+        let serial = self.open_serial.get();
         remove.connect_clicked(move |_| {
             let worker = worker.clone();
             let weak = std::rc::Weak::clone(&weak);
             let id = id.clone();
+            let Some(s) = weak.upgrade() else {
+                return;
+            };
+            // Cancel retained retries before queuing hide, so Home and Close
+            // cannot resurrect this recent. Include provisional session IDs.
+            let mut removed = Vec::new();
+            s.unsaved.borrow_mut().retain(|saved_path, snapshot| {
+                if saved_path == &path || snapshot.1.id == id {
+                    removed.push((saved_path.clone(), snapshot.clone()));
+                    false
+                } else {
+                    true
+                }
+            });
+            let pending = worker.call(move |store| store.hide(&id));
             glib::MainContext::default().spawn_local(async move {
-                let result = worker.call(move |store| store.hide(&id)).await;
+                let result = pending.await;
                 if let Some(s) = weak.upgrade() {
                     match result {
-                        Ok(()) => s.home(),
-                        Err(error) => s.storage_error(&error.to_string()),
+                        Ok(()) => {
+                            if s.unsaved.borrow().is_empty() {
+                                s.object::<adw::Banner>("save_banner").set_revealed(false);
+                            }
+                            if s.is_current(generation) && s.is_open(serial) {
+                                s.home();
+                            }
+                        }
+                        Err(error) => {
+                            let mut unsaved = s.unsaved.borrow_mut();
+                            for (path, snapshot) in removed {
+                                unsaved.entry(path).or_insert(snapshot);
+                            }
+                            drop(unsaved);
+                            s.storage_error(&error.to_string());
+                        }
                     }
                 }
             });

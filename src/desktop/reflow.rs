@@ -262,6 +262,9 @@ impl Reflow {
     }
     pub fn close(&self) {
         self.alive.store(false, Ordering::Relaxed);
+        if let Some(manager) = self.view.user_content_manager() {
+            manager.unregister_script_message_handler("readero", Some(WORLD));
+        }
         self.command(serde_json::json!({"type":"dispose"}));
         self.view.stop_loading();
     }

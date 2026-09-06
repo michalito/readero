@@ -1,10 +1,11 @@
 //! A single-owner database. The desktop layer runs this on its state worker.
 use crate::document::*;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::{path::Path, time::Duration};
+use std::{cell::RefCell, collections::HashMap, path::Path, time::Duration};
 
 pub struct Store {
     connection: Connection,
+    session_ids: RefCell<HashMap<String, String>>,
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
@@ -39,7 +40,10 @@ impl Store {
                 PRAGMA user_version=1;
                 COMMIT;")?;
         }
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            session_ids: RefCell::new(HashMap::new()),
+        })
     }
     pub fn document(&self, path: &Path) -> Result<DocumentRecord> {
         let path = std::fs::canonicalize(path)?;
@@ -80,20 +84,24 @@ impl Store {
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
     /// Reconnect a session opened while storage was unavailable. Only identity
-    /// comes from storage; the reader's current progress and settings win.
+    /// and the authoritative path come from storage; the reader's current
+    /// progress and settings win. A retained snapshot must not undo a relink.
     pub fn save_session(&self, record: &DocumentRecord) -> Result<String> {
         let transaction = self.connection.unchecked_transaction()?;
-        let existing: Option<String> = transaction
+        let session_ids = self.session_ids.borrow();
+        let id = session_ids.get(&record.id).unwrap_or(&record.id);
+        let existing: Option<(String, String)> = transaction
             .query_row(
-                "SELECT id FROM documents WHERE path=?1
-                    AND NOT EXISTS (SELECT 1 FROM documents WHERE id=?2)",
-                params![record.path.to_string_lossy(), record.id],
-                |row| row.get(0),
+                "SELECT id, path FROM documents WHERE id=?2 OR path=?1
+                    ORDER BY (id=?2) DESC LIMIT 1",
+                params![record.path.to_string_lossy(), id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         let mut record = record.clone();
-        if let Some(id) = existing {
+        if let Some((id, path)) = existing {
             record.id = id;
+            record.path = path.into();
         }
         self.save(&record)?;
         transaction.commit()?;
@@ -129,6 +137,18 @@ impl Store {
         Ok(())
     }
     pub fn relink(&self, id: &str, path: &Path) -> Result<DocumentRecord> {
+        self.relink_sessions(id, path, &[])
+            .map(|(record, _)| record)
+    }
+    /// Bind retained provisional sessions while the old path still identifies
+    /// the document. Keep these aliases for queued retries in this worker.
+    pub fn relink_sessions(
+        &self,
+        id: &str,
+        path: &Path,
+        sessions: &[DocumentRecord],
+    ) -> Result<(DocumentRecord, Vec<String>)> {
+        let transaction = self.connection.unchecked_transaction()?;
         let json: String =
             self.connection
                 .query_row("SELECT payload FROM documents WHERE id=?1", [id], |r| {
@@ -141,9 +161,26 @@ impl Store {
                 "Choose a document of the same format.".into(),
             ));
         }
+        let sessions = sessions
+            .iter()
+            .filter(|session| session.id == id || session.path == record.path)
+            .collect::<Vec<_>>();
+        if let Some(session) = sessions.last() {
+            record.locator = session.locator.clone();
+            record.settings = session.settings.clone();
+            record.revision = session.revision.clone();
+            record.last_opened = session.last_opened;
+        }
         record.path = path;
         self.save(&record)?;
-        Ok(record)
+        transaction.commit()?;
+        let session_ids = sessions.iter().map(|session| session.id.clone()).collect();
+        for session in sessions {
+            self.session_ids
+                .borrow_mut()
+                .insert(session.id.clone(), id.to_owned());
+        }
+        Ok((record, session_ids))
     }
 }
 
@@ -252,6 +289,147 @@ mod tests {
             .unwrap();
         assert_eq!(store.bookmarks(&original.id).unwrap().len(), 2);
         assert_eq!(store.recents().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn failed_snapshot_retry_preserves_relinked_path_and_bookmarks() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("book.md");
+        let moved = temp.path().join("moved.md");
+        std::fs::write(&source, "# A book").unwrap();
+        let database = temp.path().join("state.sqlite3");
+        let store = Store::open(&database).unwrap();
+        store
+            .connection
+            .busy_timeout(Duration::from_millis(20))
+            .unwrap();
+        let mut snapshot = store.document(&source).unwrap();
+        store.save(&snapshot).unwrap();
+        let locator = Locator {
+            version: 1,
+            anchor: Anchor::Reflow {
+                href: "content.xhtml".into(),
+                cfi: "epubcfi(/6/2!/4/2)".into(),
+                section: 0,
+                fraction: 0.4,
+                quote: "a passage".into(),
+                block: "b1".into(),
+                block_offset: None,
+                quote_offset: 0,
+            },
+        };
+        store
+            .add_bookmark(&Bookmark {
+                id: "bookmark".into(),
+                document_id: snapshot.id.clone(),
+                label: "A passage".into(),
+                locator: locator.clone(),
+            })
+            .unwrap();
+        snapshot.locator = Some(locator);
+        snapshot.settings.font_size = 25.0;
+        let locked = Connection::open(&database).unwrap();
+        locked.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        assert!(store.save_session(&snapshot).is_err());
+        locked.execute_batch("ROLLBACK").unwrap();
+        std::fs::rename(&source, &moved).unwrap();
+        store.relink(&snapshot.id, &moved).unwrap();
+
+        // The old path may even belong to another document by retry time.
+        std::fs::write(&source, "# Another book").unwrap();
+        let other = store.document(&source).unwrap();
+        store.save(&other).unwrap();
+        for _ in 0..2 {
+            assert_eq!(store.save_session(&snapshot).unwrap(), snapshot.id);
+            let recovered = store.document(&moved).unwrap();
+            assert_eq!(recovered.id, snapshot.id);
+            assert_eq!(recovered.path, std::fs::canonicalize(&moved).unwrap());
+            assert_eq!(recovered.locator, snapshot.locator);
+            assert_eq!(recovered.settings, snapshot.settings);
+            assert_eq!(store.bookmarks(&recovered.id).unwrap().len(), 1);
+            assert_eq!(store.document(&source).unwrap().id, other.id);
+        }
+    }
+
+    #[test]
+    fn provisional_retry_follows_relink_even_when_old_path_is_reused() {
+        for reuse in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("book.md");
+            let moved = temp.path().join("moved.md");
+            std::fs::write(&source, "# A book").unwrap();
+            let database = temp.path().join("state.sqlite3");
+            let store = Store::open(&database).unwrap();
+            store
+                .connection
+                .busy_timeout(Duration::from_millis(20))
+                .unwrap();
+            let original = store.document(&source).unwrap();
+            store.save(&original).unwrap();
+            let locked = Connection::open(&database).unwrap();
+            locked.execute_batch("BEGIN EXCLUSIVE").unwrap();
+            assert!(store.document(&source).is_err());
+            let mut snapshot = DocumentRecord::new(source.clone()).unwrap();
+            snapshot.settings.font_size = 25.0;
+            snapshot.locator = Some(Locator {
+                version: 1,
+                anchor: Anchor::Pdf {
+                    page: 5,
+                    x: 0.0,
+                    y: 0.0,
+                    viewport_y: 0.0,
+                },
+            });
+            assert!(store.save_session(&snapshot).is_err());
+            locked.execute_batch("ROLLBACK").unwrap();
+            std::fs::rename(&source, &moved).unwrap();
+            store
+                .add_bookmark(&Bookmark {
+                    id: "original-bookmark".into(),
+                    document_id: original.id.clone(),
+                    label: "Saved passage".into(),
+                    locator: snapshot.locator.clone().unwrap(),
+                })
+                .unwrap();
+            // A rejected relocation must leave storage and retry identity alone.
+            assert!(
+                store
+                    .relink_sessions(
+                        &original.id,
+                        &temp.path().join("missing.md"),
+                        &[snapshot.clone()]
+                    )
+                    .is_err()
+            );
+            assert!(store.session_ids.borrow().is_empty());
+            store
+                .relink_sessions(&original.id, &moved, &[snapshot.clone()])
+                .unwrap();
+            assert_eq!(store.document(&moved).unwrap().locator, snapshot.locator);
+            let other = if reuse {
+                std::fs::write(&source, "# Another book").unwrap();
+                let other = store.document(&source).unwrap();
+                store.save(&other).unwrap();
+                Some(other)
+            } else {
+                None
+            };
+            for _ in 0..2 {
+                assert_eq!(store.save_session(&snapshot).unwrap(), original.id);
+                let recovered = store.document(&moved).unwrap();
+                assert_eq!(recovered.locator, snapshot.locator);
+                assert_eq!(recovered.settings, snapshot.settings);
+                assert_eq!(store.bookmarks(&recovered.id).unwrap().len(), 1);
+                assert_eq!(recovered.path, moved);
+                assert_eq!(store.recents().unwrap().len(), if reuse { 2 } else { 1 });
+                if let Some(other) = &other {
+                    let unchanged = store.document(&source).unwrap();
+                    assert_eq!(unchanged.id, other.id);
+                    assert_eq!(unchanged.locator, other.locator);
+                    assert_eq!(unchanged.settings, other.settings);
+                }
+            }
+        }
     }
 
     #[test]

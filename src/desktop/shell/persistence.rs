@@ -58,27 +58,49 @@ impl Shell {
             timer.remove();
         }
         self.dirty_since.set(None);
-        let Some(record) = self.record_for_save() else {
-            return;
-        };
-        let weak = Rc::downgrade(self);
-        let session_id = record.id.clone();
-        let generation = self.generation.get();
-        let pending = self.worker.call(move |store| store.save_session(&record));
-        glib::MainContext::default().spawn_local(async move {
-            let result = pending.await;
-            if let Some(s) = weak.upgrade()
-                && s.is_current(generation)
-            {
+        if let Some(record) = self.record_for_save() {
+            let serial = self.save_serial.get() + 1;
+            self.save_serial.set(serial);
+            self.unsaved
+                .borrow_mut()
+                .insert(record.path.clone(), (serial, record));
+        }
+        // Keep snapshots until acknowledged, even after navigation. Retry also
+        // saves documents that are no longer the active reader.
+        let records = self.unsaved.borrow().values().cloned().collect::<Vec<_>>();
+        for (serial, record) in records {
+            let weak = Rc::downgrade(self);
+            let session_id = record.id.clone();
+            let path = record.path.clone();
+            let generation = self.generation.get();
+            let pending = self.worker.call(move |store| store.save_session(&record));
+            glib::MainContext::default().spawn_local(async move {
+                let result = pending.await;
+                let Some(s) = weak.upgrade() else {
+                    return;
+                };
                 match result {
                     Ok(id) => {
-                        s.reconnect_identity(&session_id, id);
-                        s.object::<adw::Banner>("save_banner").set_revealed(false);
+                        let mut unsaved = s.unsaved.borrow_mut();
+                        if unsaved
+                            .get(&path)
+                            .is_some_and(|(latest, _)| *latest == serial)
+                        {
+                            unsaved.remove(&path);
+                        }
+                        let saved_all = unsaved.is_empty();
+                        drop(unsaved);
+                        if s.is_current(generation) {
+                            s.reconnect_identity(&session_id, id);
+                        }
+                        if saved_all {
+                            s.object::<adw::Banner>("save_banner").set_revealed(false);
+                        }
                     }
                     Err(error) => s.storage_error(&error.to_string()),
                 }
-            }
-        });
+            });
+        }
     }
 
     pub(super) fn reconnect_identity(self: &Rc<Self>, session_id: &str, id: String) {
@@ -140,25 +162,28 @@ impl Shell {
                         | gio::FileMonitorEvent::MovedOut
                 ) && let Some(s) = weak.upgrade()
                 {
-                    if let Some(timer) = s.reload_timer.borrow_mut().take() {
-                        timer.remove();
-                    }
-                    let weak = Rc::downgrade(&s);
-                    let timer =
-                        glib::timeout_add_local_once(Duration::from_millis(450), move || {
-                            if let Some(s) = weak.upgrade() {
-                                s.reload_timer.borrow_mut().take();
-                                let path = s.current.borrow().as_ref().map(|r| r.path.clone());
-                                if let Some(path) = path {
-                                    s.reload(path);
-                                }
-                            }
-                        });
-                    s.reload_timer.replace(Some(timer));
+                    s.schedule_reload(path.clone());
                 }
             });
             self.monitor.replace(Some(monitor));
         }
+    }
+
+    pub(super) fn schedule_reload(self: &Rc<Self>, path: PathBuf) {
+        if let Some(timer) = self.reload_timer.borrow_mut().take() {
+            timer.remove();
+        }
+        let generation = self.generation.get();
+        let weak = Rc::downgrade(self);
+        let timer = glib::timeout_add_local_once(Duration::from_millis(450), move || {
+            if let Some(s) = weak.upgrade() {
+                s.reload_timer.borrow_mut().take();
+                if s.is_current(generation) {
+                    s.reload(path);
+                }
+            }
+        });
+        self.reload_timer.replace(Some(timer));
     }
 
     pub(super) fn close(self: &Rc<Self>) {
@@ -173,6 +198,13 @@ impl Shell {
         if let Some(timer) = self.save_timer.borrow_mut().take() {
             timer.remove();
         }
+        self.cancel_open();
+        let mut records = self
+            .unsaved
+            .borrow()
+            .iter()
+            .map(|(path, (_, record))| (path.clone(), record.clone()))
+            .collect::<std::collections::HashMap<_, _>>();
         let worker = self.worker.clone();
         let shell = Rc::clone(self);
         glib::MainContext::default().spawn_local(async move {
@@ -183,11 +215,14 @@ impl Shell {
                 {
                     record.locator = Some(locator);
                 }
-                worker.call(move |store| {
                 if let Some(record) = record {
-                    store.save_session(&record)?;
+                    records.insert(record.path.clone(), record);
                 }
-                Ok(())
+                worker.call(move |store| {
+                    for record in records.values() {
+                        store.save_session(record)?;
+                    }
+                    Ok(())
                 }).await
             }.await;
             if let Err(error) = result {

@@ -1,3 +1,5 @@
+import { locatorFor } from "./anchors.js";
+
 const yieldTask = () => new Promise((resolve) => setTimeout(resolve, 0));
 const blocks =
   "p,div,li,dt,dd,blockquote,h1,h2,h3,h4,h5,h6,pre,td,th,figcaption";
@@ -9,8 +11,12 @@ export async function searchRanges(
   limit = 500,
   cancelled = () => false,
 ) {
-  if (!query.trim() || !doc?.body || limit <= 0) return [];
-  const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+  if (!query.trim() || !(doc?.body ?? doc?.documentElement) || limit <= 0)
+    return [];
+  const walker = doc.createTreeWalker(
+    doc.body ?? doc.documentElement,
+    NodeFilter.SHOW_TEXT,
+  );
   const entries = [],
     chunks = [];
   let node,
@@ -71,4 +77,39 @@ export async function searchRanges(
     });
   }
   return results;
+}
+
+/** Always finish the active search, including empty or unreadable sections. */
+export async function searchBook(book, query, update, cancelled, onError) {
+  const items = [];
+  try {
+    if (!query.trim()) return;
+    for (let index = 0; index < book.sections.length; index++) {
+      if (cancelled()) return;
+      try {
+        const doc = await book.sections[index].createDocument();
+        if (cancelled()) return;
+        const matches = await searchRanges(
+          doc,
+          query,
+          500 - items.length,
+          cancelled,
+        );
+        if (cancelled()) return;
+        for (const { label, range } of matches) {
+          const locator = locatorFor(book, index, range);
+          if (locator) items.push({ label, locator });
+        }
+      } catch (error) {
+        if (cancelled()) return;
+        onError(error);
+      }
+      if (items.length >= 500) break;
+      update({ type: "search", query, items: items.slice(), complete: false });
+      await yieldTask();
+    }
+  } finally {
+    if (!cancelled())
+      update({ type: "search", query, items: items.slice(), complete: true });
+  }
 }

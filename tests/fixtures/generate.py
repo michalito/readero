@@ -56,3 +56,13 @@ for page, (width, height) in enumerate([(595,842),(842,595),(420,640),(1000,720)
     ctx.show_page()
 surface.finish()
 print('Created mixed-dimension PDF fixture')
+
+# A valid reflowable publication whose first spine item has no HTML body.
+with zipfile.ZipFile(root / 'reading.epub') as source, zipfile.ZipFile(root / 'svg-cover.epub', 'w') as target:
+    for item in source.infolist():
+        data = source.read(item.filename)
+        if item.filename == 'package.opf':
+            data = data.decode().replace('<manifest>', '<manifest><item id="cover" href="cover.svg" media-type="image/svg+xml"/>').replace('<spine>', '<spine><itemref idref="cover"/>').encode()
+        target.writestr(item, data)
+    target.writestr('cover.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="1600"><rect width="400" height="1600" fill="#40684b"/><circle cx="200" cy="1200" r="100" fill="#f5efdf"/></svg>')
+print('Created standalone SVG cover EPUB fixture')
