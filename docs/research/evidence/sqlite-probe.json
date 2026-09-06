@@ -1,0 +1,8 @@
+{
+  "sqlite_version": "3.46.1",
+  "journal_mode": "DELETE",
+  "synchronous": "FULL",
+  "committed_location_survived_killed_writer": true,
+  "integrity_check": "ok",
+  "scope": "Process termination during an uncommitted transaction; not a power-loss or filesystem fault test."
+}

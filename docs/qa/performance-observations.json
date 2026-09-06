@@ -1,0 +1,153 @@
+{
+  "scope": "Native Wayland readiness and idle observations. These do not establish frame-time, input-latency, battery, GPU, or full PRD qualification.",
+  "window_logical_pixels": [
+    1080,
+    820
+  ],
+  "refresh_scale_power_mode": "Inherited current desktop settings; not normalized or fully recorded.",
+  "readiness_probe_binary_sha256": "e7cb6324bbfa6dbfcae45d462bbd8b0346ead6c5573a01aee551282a6a33850a",
+  "idle_probe_binary_sha256": "dd9807df2973ba4782c0306e0c2829a27ae14e98093fe73939fe35b682dc750c",
+  "markdown": {
+    "kind": "timing",
+    "surface": "native Wayland",
+    "instrumentation": "optimized native app with opt-in readiness probe; not frame-time or input-latency qualification",
+    "launch_readiness": {
+      "n": 10,
+      "median_ms": 1348.891387,
+      "p95_ms": 1492.872486,
+      "max_ms": 1492.872486
+    },
+    "warm_readiness": {
+      "n": 30,
+      "median_ms": 445.795973,
+      "p95_ms": 482.41342599999996,
+      "max_ms": 483.266072
+    },
+    "launch_ready_ms": [
+      1379.884407,
+      1228.387336,
+      1348.891387,
+      1492.872486,
+      1380.092922,
+      1380.572672,
+      1321.587216,
+      1331.741277,
+      1295.418413,
+      1334.046683
+    ],
+    "warm_ready_ms": [
+      453.917791,
+      446.087024,
+      482.41342599999996,
+      480.71250599999996,
+      483.266072,
+      398.317231,
+      443.27784199999996,
+      387.68303799999995,
+      474.86267399999997,
+      439.279262,
+      460.546586,
+      449.451049,
+      425.908159,
+      431.626415,
+      421.942541,
+      468.110867,
+      417.96981100000005,
+      429.58241499999997,
+      478.89464599999997,
+      445.795973,
+      454.070378,
+      437.112506,
+      434.813825,
+      453.044277,
+      466.90488899999997,
+      375.769511,
+      430.04672700000003,
+      409.686866,
+      475.104649,
+      437.148573
+    ],
+    "cache_condition": "OS cache not cleared; each process launch includes a private D-Bus session",
+    "pdf_limitation": "PDF observes native ready plus 32 ms; pixel-readiness is not asserted"
+  },
+  "epub-02": {
+    "kind": "timing",
+    "surface": "native Wayland",
+    "instrumentation": "optimized native app with opt-in readiness probe; not frame-time or input-latency qualification",
+    "launch_readiness": {
+      "n": 10,
+      "median_ms": 1270.303466,
+      "p95_ms": 1384.60804,
+      "max_ms": 1384.60804
+    },
+    "warm_readiness": {
+      "n": 30,
+      "median_ms": 383.243501,
+      "p95_ms": 459.81059600000003,
+      "max_ms": 468.378665
+    },
+    "launch_ready_ms": [
+      1373.179831,
+      1270.303466,
+      1305.903206,
+      1060.663959,
+      1239.690003,
+      1384.60804,
+      1265.598211,
+      1209.049186,
+      1266.205429,
+      1285.988461
+    ],
+    "warm_ready_ms": [
+      383.497189,
+      391.57768300000004,
+      446.15876399999996,
+      372.07893199999995,
+      468.378665,
+      396.36569199999997,
+      395.40063399999997,
+      325.89149699999996,
+      338.47321600000004,
+      306.664675,
+      381.594098,
+      278.861129,
+      357.00338,
+      374.7912,
+      394.36368500000003,
+      364.927344,
+      449.856533,
+      383.243501,
+      349.67655399999995,
+      459.81059600000003,
+      333.955937,
+      339.021065,
+      422.93707400000005,
+      389.335153,
+      327.783909,
+      328.133961,
+      409.399067,
+      440.383821,
+      383.82420099999996,
+      372.09344799999997
+    ],
+    "cache_condition": "OS cache not cleared; each process launch includes a private D-Bus session",
+    "pdf_limitation": "PDF observes native ready plus 32 ms; pixel-readiness is not asserted"
+  },
+  "epub-02_idle": {
+    "kind": "idle",
+    "surface": "native Wayland",
+    "instrumentation": "optimized native app with opt-in readiness probe; not frame-time or input-latency qualification",
+    "idle": {
+      "seconds": 119.37940447102301,
+      "one_cpu_percent": 0.3015595542591125,
+      "start_pss_mib": 210.6142578125,
+      "end_pss_mib": 216.291015625,
+      "peak_pss_mib": 221.8974609375,
+      "processes": 8,
+      "gpu_memory": "not measured",
+      "activity_before_idle": "40 turns and 20 mode changes",
+      "baseline_pss_mib": 194.564453125,
+      "growth_within_budget": true
+    }
+  }
+}

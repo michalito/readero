@@ -1,0 +1,20 @@
+{
+  "engine": "foliate-continuous-proof",
+  "section": 26,
+  "sectionCount": 29,
+  "firstSectionReadyMs": 830,
+  "cfiProduced": true,
+  "scrollKeptSection": true,
+  "scrollCFIResolvable": true,
+  "pagedCFIResolvable": true,
+  "pagedVisibleRangeContainsAnchor": true,
+  "crossChapterBoundaryVisible": true,
+  "prependAnchorDriftPx": 0,
+  "mountedSectionCount": 3,
+  "cfiResolvesToSameParagraph": true,
+  "continuousToPagedAnchorVisible": true,
+  "customControllerRequired": true,
+  "alias": "epub-14",
+  "resource_requests": 38,
+  "harness": "WebKitGTK 2.52.6, Xvfb, local ZIP URI handler; timings are smoke diagnostics only"
+}

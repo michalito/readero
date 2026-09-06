@@ -1,0 +1,21 @@
+{
+  "version": "0.1.1",
+  "platform": "Ubuntu 26.04 amd64",
+  "authored_rust_tests": 16,
+  "strict_clippy": "passed, including smoke and qualification targets, no-deps",
+  "formatting": "authored Rust and renderer JS passed",
+  "smoke_feature_in_delivery": false,
+  "package_installation": "apt-get dry run succeeded; only Readero would be installed; no system installation performed",
+  "artifacts": {
+    "target/release/readero": {
+      "bytes": 2598528,
+      "sha256": "edf6a9dafb45373847f97e880a88638ca5a003b65314f85ca41e4935311bd5a6"
+    },
+    "dist/readero_0.1.1_amd64.deb": {
+      "bytes": 844146,
+      "sha256": "c09a11b2945f58319c9e267a4f02c8ea3e9caae853241440d8063d725d2d2f92"
+    }
+  },
+  "package_root_mode": "0755",
+  "packaged_binary_matches_verified_binary": true
+}

@@ -1,0 +1,315 @@
+<?xml version="1.0" ?>
+<interface>
+  <requires lib="gtk" version="4.14"/>
+  <requires lib="Adw" version="1.5"/>
+  <object class="AdwApplicationWindow" id="window">
+    <property name="title">Readero</property>
+    <property name="default-width">1080</property>
+    <property name="default-height">820</property>
+    <property name="width-request">680</property>
+    <property name="height-request">450</property>
+    <style>
+      <class name="readero-window"/>
+    </style>
+    <property name="content">
+      <object class="GtkBox">
+        <property name="orientation">vertical</property>
+        <child>
+          <object class="AdwHeaderBar" id="header">
+            <property name="show-title">true</property>
+            <child type="start">
+              <object class="GtkButton" id="home_button">
+                <property name="label">Readero</property>
+                <property name="tooltip-text">Reading home</property>
+                <style>
+                  <class name="flat"/>
+                  <class name="brand"/>
+                </style>
+              </object>
+            </child>
+            <child type="start">
+              <object class="GtkButton" id="open_button">
+                <property name="icon-name">document-open-symbolic</property>
+                <property name="tooltip-text">Open document (Ctrl+O)</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <property name="title-widget">
+              <object class="GtkBox" id="modes">
+                <property name="valign">center</property>
+                <style>
+                  <class name="mode-switch"/>
+                </style>
+                <child>
+                  <object class="GtkToggleButton" id="scroll_mode">
+                    <property name="label">Scroll</property>
+                    <property name="tooltip-text">Continuous reading</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkToggleButton" id="pages_mode">
+                    <property name="label">Pages</property>
+                    <property name="tooltip-text">Page-by-page reading</property>
+                  </object>
+                </child>
+              </object>
+            </property>
+            <child type="end">
+              <object class="GtkMenuButton" id="menu_button">
+                <property name="icon-name">open-menu-symbolic</property>
+                <property name="tooltip-text">More options</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="focus_button">
+                <property name="icon-name">view-fullscreen-symbolic</property>
+                <property name="tooltip-text">Focus on reading (F9)</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkMenuButton" id="appearance_button">
+                <property name="label">Aa</property>
+                <property name="tooltip-text">Reading appearance</property>
+                <style>
+                  <class name="flat"/>
+                  <class name="type-button"/>
+                </style>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="bookmark_button">
+                <property name="icon-name">bookmark-new-symbolic</property>
+                <property name="tooltip-text">Bookmark this passage (Ctrl+D)</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="search_button">
+                <property name="icon-name">system-search-symbolic</property>
+                <property name="tooltip-text">Search this document (Ctrl+F)</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child type="end">
+              <object class="GtkButton" id="sidebar_button">
+                <property name="icon-name">sidebar-show-symbolic</property>
+                <property name="tooltip-text">Contents and bookmarks (F8)</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="AdwBanner" id="save_banner">
+            <property name="title">Your progress is not being saved.</property>
+            <property name="button-label">Retry</property>
+            <property name="revealed">false</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox" id="body">
+            <property name="vexpand">true</property>
+            <child>
+              <object class="GtkRevealer" id="sidebar_revealer">
+                <property name="transition-type">slide-right</property>
+                <property name="transition-duration">0</property>
+                <property name="child">
+                  <object class="GtkBox" id="sidebar">
+                    <property name="orientation">vertical</property>
+                    <property name="width-request">260</property>
+                    <style>
+                      <class name="reading-sidebar"/>
+                    </style>
+                    <child>
+                      <object class="GtkLabel" id="sidebar_title">
+                        <property name="label">In this document</property>
+                        <property name="xalign">0</property>
+                        <property name="margin-start">20</property>
+                        <property name="margin-end">20</property>
+                        <property name="margin-top">20</property>
+                        <property name="margin-bottom">16</property>
+                        <style>
+                          <class name="heading"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkDropDown" id="sidebar_kind">
+                        <property name="margin-start">16</property>
+                        <property name="margin-end">16</property>
+                        <property name="margin-bottom">12</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkSearchEntry" id="search_entry">
+                        <property name="placeholder-text">Find in document</property>
+                        <property name="margin-start">16</property>
+                        <property name="margin-end">16</property>
+                        <property name="margin-bottom">8</property>
+                        <property name="visible">false</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkBox" id="search_navigation">
+                        <property name="visible">false</property>
+                        <property name="spacing">6</property>
+                        <property name="margin-start">16</property>
+                        <property name="margin-end">16</property>
+                        <property name="margin-bottom">8</property>
+                        <child>
+                          <object class="GtkButton" id="search_previous">
+                            <property name="label">Previous</property>
+                            <property name="tooltip-text">Previous match (Ctrl+Shift+G)</property>
+                            <property name="hexpand">true</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                        <child>
+                          <object class="GtkButton" id="search_next">
+                            <property name="label">Next</property>
+                            <property name="tooltip-text">Next match (Ctrl+G)</property>
+                            <property name="hexpand">true</property>
+                            <style>
+                              <class name="flat"/>
+                            </style>
+                          </object>
+                        </child>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel" id="search_status">
+                        <property name="xalign">0</property>
+                        <property name="wrap">true</property>
+                        <property name="margin-start">20</property>
+                        <property name="margin-end">16</property>
+                        <property name="margin-bottom">8</property>
+                        <style>
+                          <class name="dim-label"/>
+                          <class name="caption"/>
+                        </style>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkScrolledWindow">
+                        <property name="vexpand">true</property>
+                        <property name="hscrollbar-policy">never</property>
+                        <property name="child">
+                          <object class="GtkListBox" id="navigation_list">
+                            <property name="selection-mode">none</property>
+                            <style>
+                              <class name="navigation-list"/>
+                            </style>
+                          </object>
+                        </property>
+                      </object>
+                    </child>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkStack" id="content">
+                <property name="hexpand">true</property>
+                <property name="vexpand">true</property>
+                <property name="transition-type">none</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="GtkBox" id="footer">
+            <property name="spacing">16</property>
+            <property name="margin-start">24</property>
+            <property name="margin-end">16</property>
+            <property name="margin-top">6</property>
+            <property name="margin-bottom">6</property>
+            <style>
+              <class name="reading-footer"/>
+            </style>
+            <child>
+              <object class="GtkLabel" id="document_title">
+                <property name="xalign">0</property>
+                <property name="ellipsize">end</property>
+                <property name="hexpand">true</property>
+                <property name="max-width-chars">50</property>
+                <style>
+                  <class name="caption"/>
+                  <class name="dim-label"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="back_button">
+                <property name="icon-name">go-previous-symbolic</property>
+                <property name="tooltip-text">Back to previous passage (Alt+Left)</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="forward_button">
+                <property name="icon-name">go-next-symbolic</property>
+                <property name="tooltip-text">Forward (Alt+Right)</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="previous_button">
+                <property name="icon-name">pan-start-symbolic</property>
+                <property name="tooltip-text">Previous page</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkLabel" id="position_label">
+                <property name="label">Ready to read</property>
+                <style>
+                  <class name="caption"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkButton" id="next_button">
+                <property name="icon-name">pan-end-symbolic</property>
+                <property name="tooltip-text">Next page</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkMenuButton" id="page_button">
+                <property name="icon-name">go-jump-symbolic</property>
+                <property name="tooltip-text">Go to page (Ctrl+L)</property>
+                <style>
+                  <class name="flat"/>
+                </style>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </property>
+  </object>
+</interface>

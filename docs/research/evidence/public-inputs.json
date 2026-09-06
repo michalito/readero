@@ -1,0 +1,74 @@
+[
+  {
+    "kind": "source",
+    "repository": "futurepress/epub.js",
+    "requested_ref": "v0.3.93",
+    "commit": "0963efe979e34d53507fee1dc10827ecb07fdc75",
+    "commit_date": "2022-02-15T18:13:52Z",
+    "sha256": "56384469c0e8096cd32bcb552558dc2e989deda9803f5219df834aea52cc2c97"
+  },
+  {
+    "kind": "typelib",
+    "package": "gir1.2-papers-4.0",
+    "version": "50.2-0ubuntu0.1",
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/papers/gir1.2-papers-4.0_50.2-0ubuntu0.1_amd64.deb",
+    "sha256": "beedcd6d24e4a31808597036e757fe6f4a59122f5b4211d29ea2dc4d80c2a527"
+  },
+  {
+    "kind": "source",
+    "repository": "johnfactotum/foliate-js",
+    "requested_ref": "main",
+    "commit": "78914aef4466eb960965702401634c2cb348e9b1",
+    "commit_date": "2026-05-01T19:24:25Z",
+    "sha256": "4878cd5f04073af5046ea543da73a963a7f9e1a4b30ddc63ac86cea5adf02f38"
+  },
+  {
+    "kind": "typelib",
+    "package": "gir1.2-webkit-6.0",
+    "version": "2.52.6-0ubuntu0.26.04.1",
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/w/webkit2gtk/gir1.2-webkit-6.0_2.52.6-0ubuntu0.26.04.1_amd64.deb",
+    "sha256": "21f1d0c50ca5457c0edd9cd066f117140f9439b1799d7a03b207b2bcc834ad97"
+  },
+  {
+    "kind": "source",
+    "repository": "GNOME/papers",
+    "requested_ref": "50.2",
+    "commit": "785ca168a98945f59d62308d664888c503ecf8ac",
+    "commit_date": "2026-05-25T11:00:02Z",
+    "sha256": "1b3a28fddb38fe8815254d660548b32516d21c212fe130cec9f09d450ec5dae6"
+  },
+  {
+    "kind": "typelib",
+    "package": "gir1.2-javascriptcoregtk-6.0",
+    "version": "2.52.6-0ubuntu0.26.04.1",
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/w/webkit2gtk/gir1.2-javascriptcoregtk-6.0_2.52.6-0ubuntu0.26.04.1_amd64.deb",
+    "sha256": "11846701f2a6cf9099f142345594bd7133e5b03d1d7267ba8aca181313eb9100"
+  },
+  {
+    "kind": "typelib",
+    "package": "gir1.2-poppler-0.18",
+    "version": "26.01.0-2ubuntu0.1",
+    "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/poppler/gir1.2-poppler-0.18_26.01.0-2ubuntu0.1_amd64.deb",
+    "sha256": "609f77c5fd04f01983a9ee062eb30eaab3f44a84f69e5f8548234839e8f994c6"
+  },
+  {
+    "kind": "source",
+    "repository": "readium/ts-toolkit",
+    "requested_ref": "develop",
+    "commit": "893a5cc362605ad19f1be1d905159c1b7282c68d",
+    "commit_date": "2026-08-03T16:03:52Z",
+    "sha256": "46308063f1546e3da3c90a35b3dd7a01d2e0b716ae50b24babed94aecba46ca6"
+  },
+  {
+    "kind": "public-file",
+    "name": "epub.min.js",
+    "url": "https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js",
+    "sha256": "06eae15745107b4aa508c95538275251f69bfb9f1175621fc458d9f42ed082d4"
+  },
+  {
+    "kind": "public-file",
+    "name": "jszip.min.js",
+    "url": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js",
+    "sha256": "acc7e41455a80765b5fd9c7ee1b8078a6d160bbbca455aeae854de65c947d59e"
+  }
+]

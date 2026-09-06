@@ -1,0 +1,14 @@
+{
+  "engine": "foliate",
+  "section": 54,
+  "sectionCount": 57,
+  "firstSectionReadyMs": 678,
+  "cfiProduced": true,
+  "scrollKeptSection": true,
+  "scrollCFIResolvable": true,
+  "pagedCFIResolvable": true,
+  "pagedVisibleRangeContainsAnchor": true,
+  "alias": "epub-01",
+  "resource_requests": 24,
+  "harness": "WebKitGTK 2.52.6, Xvfb, local ZIP URI handler; timings are smoke diagnostics only"
+}

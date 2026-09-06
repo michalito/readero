@@ -1,0 +1,62 @@
+{
+  "resolver_succeeded": true,
+  "one_glib_family": true,
+  "packages": [
+    {
+      "name": "cairo-rs",
+      "version": "0.21.5",
+      "rust_version": "1.83"
+    },
+    {
+      "name": "gdk4",
+      "version": "0.10.3",
+      "rust_version": "1.83"
+    },
+    {
+      "name": "gio",
+      "version": "0.21.5",
+      "rust_version": "1.83"
+    },
+    {
+      "name": "glib",
+      "version": "0.21.5",
+      "rust_version": "1.83"
+    },
+    {
+      "name": "gtk4",
+      "version": "0.10.3",
+      "rust_version": "1.83"
+    },
+    {
+      "name": "libadwaita",
+      "version": "0.8.1",
+      "rust_version": null
+    },
+    {
+      "name": "papers-document",
+      "version": "0.1.0",
+      "rust_version": "1.85"
+    },
+    {
+      "name": "papers-view",
+      "version": "0.1.0",
+      "rust_version": "1.85"
+    },
+    {
+      "name": "pulldown-cmark",
+      "version": "0.13.4",
+      "rust_version": "1.71.1"
+    },
+    {
+      "name": "rusqlite",
+      "version": "0.40.2",
+      "rust_version": null
+    },
+    {
+      "name": "webkit6",
+      "version": "0.5.0",
+      "rust_version": null
+    }
+  ],
+  "scope": "Cargo dependency resolution only. No GTK Rust binary was compiled or linked; local development headers and pkg-config are absent."
+}

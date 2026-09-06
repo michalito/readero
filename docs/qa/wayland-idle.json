@@ -1,0 +1,13 @@
+{
+  "backend": "Wayland, current system renderer; 1050x800 requested logical size",
+  "fixture": "original Markdown tour",
+  "sample_seconds": 60.785,
+  "idle_cpu_percent_one_core": 0.082,
+  "initial_pss_mib": 236.35,
+  "final_pss_mib": 239.86,
+  "maximum_pss_mib": 239.91,
+  "processes": 8,
+  "gpu_memory": "not measured",
+  "valid": true,
+  "scope": "one settled release-build observation; not the complete PRD performance qualification"
+}

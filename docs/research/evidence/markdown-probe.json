@@ -1,0 +1,13 @@
+{
+  "parser": "pulldown-cmark 0.13.4",
+  "compiled_and_executed": true,
+  "checks": [
+    "tables",
+    "task lists",
+    "fenced code",
+    "footnotes",
+    "relative link preservation",
+    "UTF-8 source offsets"
+  ],
+  "scope": "Synthetic parser fixture; no user Markdown files were present. Visual Markdown pagination remains a release gate."
+}

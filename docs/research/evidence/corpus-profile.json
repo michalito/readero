@@ -1,0 +1,683 @@
+{
+  "date": "2026-09-04",
+  "counts": {
+    "epub": 19,
+    "pdf": 14
+  },
+  "documents": [
+    {
+      "alias": "epub-01",
+      "format": "epub",
+      "bytes": 20882699,
+      "epub_version": "3.0",
+      "zip_entries": 146,
+      "uncompressed_bytes": 22687958,
+      "spine_items": 57,
+      "xhtml_items": 58,
+      "largest_xhtml_bytes": 105561,
+      "images": 77,
+      "tables": 1,
+      "pre_blocks": 0,
+      "code_elements": 10,
+      "script_elements": 0,
+      "math_elements": 7,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-02",
+      "format": "epub",
+      "bytes": 17985028,
+      "epub_version": "3.0",
+      "zip_entries": 270,
+      "uncompressed_bytes": 20156693,
+      "spine_items": 28,
+      "xhtml_items": 29,
+      "largest_xhtml_bytes": 271690,
+      "images": 230,
+      "tables": 77,
+      "pre_blocks": 37,
+      "code_elements": 2028,
+      "script_elements": 0,
+      "math_elements": 16,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-03",
+      "format": "epub",
+      "bytes": 15903806,
+      "epub_version": "3.0",
+      "zip_entries": 119,
+      "uncompressed_bytes": 18405988,
+      "spine_items": 20,
+      "xhtml_items": 21,
+      "largest_xhtml_bytes": 215732,
+      "images": 87,
+      "tables": 19,
+      "pre_blocks": 173,
+      "code_elements": 19794,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-04",
+      "format": "epub",
+      "bytes": 15405956,
+      "epub_version": "3.0",
+      "zip_entries": 233,
+      "uncompressed_bytes": 17733512,
+      "spine_items": 34,
+      "xhtml_items": 35,
+      "largest_xhtml_bytes": 241346,
+      "images": 187,
+      "tables": 12,
+      "pre_blocks": 73,
+      "code_elements": 6983,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-05",
+      "format": "epub",
+      "bytes": 14258133,
+      "epub_version": "3.0",
+      "zip_entries": 225,
+      "uncompressed_bytes": 16578330,
+      "spine_items": 29,
+      "xhtml_items": 30,
+      "largest_xhtml_bytes": 183791,
+      "images": 184,
+      "tables": 2,
+      "pre_blocks": 15,
+      "code_elements": 981,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-06",
+      "format": "epub",
+      "bytes": 13373489,
+      "epub_version": "3.0",
+      "zip_entries": 235,
+      "uncompressed_bytes": 15793531,
+      "spine_items": 25,
+      "xhtml_items": 26,
+      "largest_xhtml_bytes": 174197,
+      "images": 198,
+      "tables": 0,
+      "pre_blocks": 14,
+      "code_elements": 1121,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-07",
+      "format": "epub",
+      "bytes": 12715678,
+      "epub_version": "3.0",
+      "zip_entries": 119,
+      "uncompressed_bytes": 15025646,
+      "spine_items": 25,
+      "xhtml_items": 26,
+      "largest_xhtml_bytes": 167212,
+      "images": 82,
+      "tables": 5,
+      "pre_blocks": 65,
+      "code_elements": 5808,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-08",
+      "format": "epub",
+      "bytes": 11833090,
+      "epub_version": "3.0",
+      "zip_entries": 189,
+      "uncompressed_bytes": 13583231,
+      "spine_items": 34,
+      "xhtml_items": 35,
+      "largest_xhtml_bytes": 188675,
+      "images": 143,
+      "tables": 4,
+      "pre_blocks": 66,
+      "code_elements": 5259,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-09",
+      "format": "epub",
+      "bytes": 8826851,
+      "epub_version": "3.0",
+      "zip_entries": 143,
+      "uncompressed_bytes": 10366087,
+      "spine_items": 21,
+      "xhtml_items": 22,
+      "largest_xhtml_bytes": 145447,
+      "images": 110,
+      "tables": 0,
+      "pre_blocks": 30,
+      "code_elements": 1130,
+      "script_elements": 0,
+      "math_elements": 16,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-10",
+      "format": "epub",
+      "bytes": 8690614,
+      "epub_version": "3.0",
+      "zip_entries": 81,
+      "uncompressed_bytes": 10187574,
+      "spine_items": 26,
+      "xhtml_items": 27,
+      "largest_xhtml_bytes": 108391,
+      "images": 43,
+      "tables": 16,
+      "pre_blocks": 0,
+      "code_elements": 0,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-11",
+      "format": "epub",
+      "bytes": 8110766,
+      "epub_version": "3.0",
+      "zip_entries": 94,
+      "uncompressed_bytes": 9453006,
+      "spine_items": 17,
+      "xhtml_items": 18,
+      "largest_xhtml_bytes": 141682,
+      "images": 65,
+      "tables": 9,
+      "pre_blocks": 5,
+      "code_elements": 41,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-12",
+      "format": "epub",
+      "bytes": 8083150,
+      "epub_version": "3.0",
+      "zip_entries": 104,
+      "uncompressed_bytes": 10369945,
+      "spine_items": 30,
+      "xhtml_items": 31,
+      "largest_xhtml_bytes": 220219,
+      "images": 62,
+      "tables": 3,
+      "pre_blocks": 0,
+      "code_elements": 0,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-13",
+      "format": "epub",
+      "bytes": 8077062,
+      "epub_version": "3.0",
+      "zip_entries": 97,
+      "uncompressed_bytes": 9381387,
+      "spine_items": 17,
+      "xhtml_items": 18,
+      "largest_xhtml_bytes": 152052,
+      "images": 68,
+      "tables": 9,
+      "pre_blocks": 10,
+      "code_elements": 181,
+      "script_elements": 0,
+      "math_elements": 10,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-14",
+      "format": "epub",
+      "bytes": 7913942,
+      "epub_version": "3.0",
+      "zip_entries": 100,
+      "uncompressed_bytes": 10001754,
+      "spine_items": 29,
+      "xhtml_items": 30,
+      "largest_xhtml_bytes": 152258,
+      "images": 59,
+      "tables": 12,
+      "pre_blocks": 264,
+      "code_elements": 21891,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-15",
+      "format": "epub",
+      "bytes": 7472718,
+      "epub_version": "3.0",
+      "zip_entries": 109,
+      "uncompressed_bytes": 9148385,
+      "spine_items": 24,
+      "xhtml_items": 25,
+      "largest_xhtml_bytes": 182557,
+      "images": 73,
+      "tables": 24,
+      "pre_blocks": 39,
+      "code_elements": 476,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-16",
+      "format": "epub",
+      "bytes": 6812382,
+      "epub_version": "3.0",
+      "zip_entries": 103,
+      "uncompressed_bytes": 8218408,
+      "spine_items": 21,
+      "xhtml_items": 22,
+      "largest_xhtml_bytes": 187695,
+      "images": 70,
+      "tables": 14,
+      "pre_blocks": 0,
+      "code_elements": 0,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-17",
+      "format": "epub",
+      "bytes": 5252945,
+      "epub_version": "3.0",
+      "zip_entries": 61,
+      "uncompressed_bytes": 6784751,
+      "spine_items": 24,
+      "xhtml_items": 25,
+      "largest_xhtml_bytes": 198193,
+      "images": 25,
+      "tables": 7,
+      "pre_blocks": 6,
+      "code_elements": 33,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-18",
+      "format": "epub",
+      "bytes": 4890527,
+      "epub_version": "3.0",
+      "zip_entries": 69,
+      "uncompressed_bytes": 6234531,
+      "spine_items": 22,
+      "xhtml_items": 23,
+      "largest_xhtml_bytes": 207190,
+      "images": 35,
+      "tables": 4,
+      "pre_blocks": 0,
+      "code_elements": 1,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "epub-19",
+      "format": "epub",
+      "bytes": 4399805,
+      "epub_version": "3.0",
+      "zip_entries": 90,
+      "uncompressed_bytes": 5630638,
+      "spine_items": 30,
+      "xhtml_items": 31,
+      "largest_xhtml_bytes": 125511,
+      "images": 48,
+      "tables": 0,
+      "pre_blocks": 95,
+      "code_elements": 2692,
+      "script_elements": 0,
+      "math_elements": 0,
+      "xml_parse_failures": 0,
+      "encryption_metadata": false,
+      "fixed_layout": false
+    },
+    {
+      "alias": "pdf-01",
+      "format": "pdf",
+      "bytes": 1102657,
+      "pages": 1,
+      "open_ms": 24.19,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            595.4399999999999,
+            824.98779
+          ],
+          "text_chars": 0,
+          "image_regions": 1
+        }
+      ]
+    },
+    {
+      "alias": "pdf-02",
+      "format": "pdf",
+      "bytes": 840142,
+      "error": "Error"
+    },
+    {
+      "alias": "pdf-03",
+      "format": "pdf",
+      "bytes": 344931,
+      "pages": 6,
+      "open_ms": 1.43,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            841.92,
+            595.3199999999999
+          ],
+          "text_chars": 6556,
+          "image_regions": 0
+        },
+        {
+          "index": 3,
+          "size_points": [
+            841.92,
+            595.3199999999999
+          ],
+          "text_chars": 7733,
+          "image_regions": 0
+        },
+        {
+          "index": 5,
+          "size_points": [
+            841.92,
+            595.3199999999999
+          ],
+          "text_chars": 4837,
+          "image_regions": 0
+        }
+      ]
+    },
+    {
+      "alias": "pdf-04",
+      "format": "pdf",
+      "bytes": 266114,
+      "pages": 4,
+      "open_ms": 1.49,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            1191.12,
+            841.91998
+          ],
+          "text_chars": 1941,
+          "image_regions": 0
+        },
+        {
+          "index": 2,
+          "size_points": [
+            1191.12,
+            841.91998
+          ],
+          "text_chars": 4014,
+          "image_regions": 0
+        },
+        {
+          "index": 3,
+          "size_points": [
+            1191.12,
+            841.91998
+          ],
+          "text_chars": 1802,
+          "image_regions": 0
+        }
+      ]
+    },
+    {
+      "alias": "pdf-05",
+      "format": "pdf",
+      "bytes": 219523,
+      "pages": 1,
+      "open_ms": 0.81,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            595.7280000000001,
+            842.53
+          ],
+          "text_chars": 1679,
+          "image_regions": 1
+        }
+      ]
+    },
+    {
+      "alias": "pdf-06",
+      "format": "pdf",
+      "bytes": 183029,
+      "pages": 1,
+      "open_ms": 0.52,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            595.91998,
+            841.91998
+          ],
+          "text_chars": 1092,
+          "image_regions": 0
+        }
+      ]
+    },
+    {
+      "alias": "pdf-07",
+      "format": "pdf",
+      "bytes": 179462,
+      "pages": 2,
+      "open_ms": 1.12,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            595.91998,
+            841.91998
+          ],
+          "text_chars": 1499,
+          "image_regions": 0
+        },
+        {
+          "index": 1,
+          "size_points": [
+            595.91998,
+            841.91998
+          ],
+          "text_chars": 39,
+          "image_regions": 0
+        }
+      ]
+    },
+    {
+      "alias": "pdf-08",
+      "format": "pdf",
+      "bytes": 135285,
+      "pages": 2,
+      "open_ms": 0.88,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            595.91998,
+            841.91998
+          ],
+          "text_chars": 1438,
+          "image_regions": 0
+        },
+        {
+          "index": 1,
+          "size_points": [
+            595.91998,
+            841.91998
+          ],
+          "text_chars": 83,
+          "image_regions": 0
+        }
+      ]
+    },
+    {
+      "alias": "pdf-09",
+      "format": "pdf",
+      "bytes": 117788,
+      "pages": 1,
+      "open_ms": 0.33,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            612.0,
+            792.0
+          ],
+          "text_chars": 502,
+          "image_regions": 1
+        }
+      ]
+    },
+    {
+      "alias": "pdf-10",
+      "format": "pdf",
+      "bytes": 116582,
+      "pages": 1,
+      "open_ms": 0.38,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            612.0,
+            792.0
+          ],
+          "text_chars": 486,
+          "image_regions": 1
+        }
+      ]
+    },
+    {
+      "alias": "pdf-11",
+      "format": "pdf",
+      "bytes": 116582,
+      "pages": 1,
+      "open_ms": 0.8,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            612.0,
+            792.0
+          ],
+          "text_chars": 486,
+          "image_regions": 1
+        }
+      ]
+    },
+    {
+      "alias": "pdf-12",
+      "format": "pdf",
+      "bytes": 116449,
+      "pages": 1,
+      "open_ms": 0.91,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            612.0,
+            792.0
+          ],
+          "text_chars": 486,
+          "image_regions": 1
+        }
+      ]
+    },
+    {
+      "alias": "pdf-13",
+      "format": "pdf",
+      "bytes": 116449,
+      "pages": 1,
+      "open_ms": 0.49,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            612.0,
+            792.0
+          ],
+          "text_chars": 486,
+          "image_regions": 1
+        }
+      ]
+    },
+    {
+      "alias": "pdf-14",
+      "format": "pdf",
+      "bytes": 36943,
+      "pages": 1,
+      "open_ms": 0.35,
+      "sample_pages": [
+        {
+          "index": 0,
+          "size_points": [
+            612.0,
+            792.0
+          ],
+          "text_chars": 544,
+          "image_regions": 1
+        }
+      ]
+    }
+  ]
+}

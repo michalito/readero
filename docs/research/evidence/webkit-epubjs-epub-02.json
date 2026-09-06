@@ -1,0 +1,14 @@
+{
+  "engine": "epubjs",
+  "section": 7,
+  "sectionCount": 28,
+  "firstSectionReadyMs": 984,
+  "cfiProduced": true,
+  "scrollKeptSection": true,
+  "adjacentChapterFrames": 2,
+  "framesInVerticalFlow": true,
+  "chapterBoundaryVisible": true,
+  "alias": "epub-02",
+  "resource_requests": 35,
+  "harness": "WebKitGTK 2.52.6, Xvfb, local ZIP URI handler; timings are smoke diagnostics only"
+}

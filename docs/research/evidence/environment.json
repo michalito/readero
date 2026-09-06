@@ -1,0 +1,24 @@
+{
+  "date": "2026-09-04",
+  "os": "Ubuntu 26.04.1 LTS",
+  "architecture": "x86_64",
+  "cpu": "Intel Core Ultra 7 255U",
+  "memory_gib": 30.4,
+  "desktop_session": "Wayland",
+  "packages": {
+    "libadwaita-1-0": "1.9.1-0ubuntu0.1",
+    "libgtk-4-1": "4.22.4+ds-0ubuntu0.1",
+    "libpoppler-glib8t64": "26.01.0-2ubuntu0.1",
+    "libppsdocument-4.0-6": "50.2-0ubuntu0.1",
+    "libppsview-4.0-5": "50.2-0ubuntu0.1",
+    "libsqlite3-0": "3.46.1-9ubuntu0.2",
+    "libwebkitgtk-6.0-4": "2.52.6-0ubuntu0.26.04.1"
+  },
+  "rustc": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "missing_build_tools": [
+    "pkg-config",
+    "meson",
+    "flatpak"
+  ],
+  "probe_environment": "Xvfb with GTK cairo renderer. This is not the live Wayland GPU path."
+}

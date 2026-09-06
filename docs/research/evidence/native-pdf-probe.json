@@ -1,0 +1,55 @@
+{
+  "environment": "Xvfb, GTK cairo renderer, Python GI; not a GPU/performance benchmark",
+  "results": [
+    {
+      "alias": "pdf-01",
+      "load_ms": 14.46,
+      "pages": 1,
+      "selection_nonempty": false,
+      "selection_characters": 0,
+      "paged_kept_page": true,
+      "scroll_kept_page": true,
+      "document_coordinate_available": true,
+      "point": {
+        "page": 0,
+        "x": 297.72,
+        "y": 53.69
+      },
+      "coordinate_link_restored_page": true
+    },
+    {
+      "alias": "pdf-03",
+      "load_ms": 0.51,
+      "pages": 6,
+      "selection_nonempty": true,
+      "selection_characters": 42026,
+      "paged_kept_page": true,
+      "scroll_kept_page": true,
+      "document_coordinate_available": true,
+      "point": {
+        "page": 1,
+        "x": 420.96,
+        "y": 75.91
+      },
+      "coordinate_link_restored_page": true,
+      "search_result_count": 45
+    },
+    {
+      "alias": "pdf-04",
+      "load_ms": 4.1,
+      "pages": 4,
+      "selection_nonempty": true,
+      "selection_characters": 12666,
+      "paged_kept_page": true,
+      "scroll_kept_page": true,
+      "document_coordinate_available": true,
+      "point": {
+        "page": 1,
+        "x": 595.56,
+        "y": 107.4
+      },
+      "coordinate_link_restored_page": true,
+      "search_result_count": 21
+    }
+  ]
+}

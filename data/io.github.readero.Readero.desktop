@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Readero
+Comment=A quiet place for your PDF, EPUB, and Markdown documents
+Exec=readero %f
+Icon=io.github.readero.Readero
+Terminal=false
+Categories=Office;Viewer;
+MimeType=application/pdf;application/epub+zip;text/markdown;text/x-markdown;
+StartupNotify=true

@@ -1,0 +1,85 @@
+[package]
+name = "readero"
+version = "0.1.1"
+edition = "2024"
+rust-version = "1.98"
+description = "A quiet, local document reader for Ubuntu"
+publish = false
+
+[workspace]
+resolver = "2"
+members = [".", "vendor/papers-document", "vendor/papers-document/sys", "vendor/papers-view", "vendor/papers-view/sys"]
+default-members = ["."]
+
+[workspace.package]
+authors = ["The GNOME Project"]
+edition = "2021"
+homepage = "https://apps.gnome.org/Papers/"
+repository = "https://gitlab.gnome.org/GNOME/papers"
+rust-version = "1.85"
+
+[workspace.dependencies]
+papers-document = { path = "vendor/papers-document" }
+papers-document-sys = { path = "vendor/papers-document/sys" }
+papers-view = { path = "vendor/papers-view" }
+papers-view-sys = { path = "vendor/papers-view/sys" }
+gtk = { package = "gtk4", version = "=0.10.3", features = ["v4_14"] }
+gtk-sys = { package = "gtk4-sys", version = "0.10" }
+gdk = { package = "gdk4", version = "=0.10.3" }
+gdk-sys = { package = "gdk4-sys", version = "0.10" }
+glib = "=0.21.5"
+glib-sys = "0.21"
+gobject-sys = "0.21"
+gio = "=0.21.5"
+gio-sys = "0.21"
+gdk-pixbuf = "0.21"
+gdk-pixbuf-sys = "0.21"
+pango = "0.21"
+pango-sys = "0.21"
+cairo-rs = "=0.21.5"
+cairo-sys-rs = "0.21"
+
+[features]
+default = ["desktop"]
+desktop = ["dep:gtk", "dep:adw", "dep:webkit6", "dep:papers-view", "dep:papers-document", "dep:async-channel"]
+smoke = ["desktop"]
+
+[dependencies]
+gtk = { workspace = true, optional = true }
+adw = { package = "libadwaita", version = "=0.8.1", features = ["v1_5"], optional = true }
+webkit6 = { version = "=0.5.0", features = ["v2_42"], optional = true }
+papers-view = { workspace = true, features = ["v49"], optional = true }
+papers-document = { workspace = true, optional = true }
+async-channel = { version = "2.5", optional = true }
+pulldown-cmark = "=0.13.4"
+rusqlite = "=0.40.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+url = "2.5"
+percent-encoding = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "readero"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+clone_on_ref_ptr = "warn"
