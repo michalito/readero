@@ -8,4 +8,8 @@ export PKG_CONFIG_SYSROOT_DIR="$readero_prefix"
 export LIBRARY_PATH="$readero_prefix/usr/lib/x86_64-linux-gnu${LIBRARY_PATH:+:$LIBRARY_PATH}"
 export LD_LIBRARY_PATH="$readero_prefix/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export CARGO_HOME="${READERO_CARGO_HOME:-/tmp/readero-research/cargo-home}"
+if [[ "${1:-}" == --exec ]]; then
+    shift
+    exec "$@"
+fi
 exec cargo "$@"

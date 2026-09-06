@@ -4,21 +4,50 @@ A quiet native reader for Ubuntu, built around comfortable reading and keeping y
 
 Readero 0.1.1 is a working personal preview. The implementation has undergone native integration and visual checks. The complete release qualification and everyday reading sessions in the [MVP PRD](docs/MVP_PRD.md) are still separate gates; see the [implementation and QA record](docs/IMPLEMENTATION.md).
 
-## Try it on this machine
+## Install locally
 
-The optimized executable is `target/release/readero`. From the project directory:
-
-```sh
-./target/release/readero examples/quiet-reading.md
-```
-
-After packaging, `dist/readero_0.1.1_amd64.deb` provides the desktop launcher and Open With integration:
+The supported platform is **Ubuntu 26.04**, validated on **amd64 with Papers 50.2**. Builds use the machine's native libraries and are not portable binaries for arbitrary Linux releases. GNU Make, Python 3.11+, Git, and rustup must already be available. From an existing checkout, skip the first two commands:
 
 ```sh
-sudo apt install ./dist/readero_0.1.1_amd64.deb
+git clone git@github.com:michalito/readero.git
+cd readero
+make help            # list all commands; also the default for plain `make`
+make setup           # install Ubuntu dependencies (sudo), update stable Rust, check readiness
+make install         # build current source and install for your user; no sudo
 ```
 
-The package targets **Ubuntu 26.04 amd64 with Papers 50.2**. It is not a portable binary for arbitrary Linux releases. Installation is optional; the executable uses this machine's existing runtime libraries directly.
+`make setup` runs `apt-get update`, installs build and packaging dependencies, and installs/updates stable Rust with rustfmt and Clippy through rustup. If a selected older toolchain overrides stable, use `RUSTUP_TOOLCHAIN=stable make install`. If dependencies and Rust are already installed, skip setup and run `make doctor` or `make install` directly. Setup does not download or execute a rustup installer.
+
+Installation puts the executable in `~/.local/bin/readero`, and the desktop launcher, icon, license notices, and sample document under `~/.local/share`. Launch **Readero** from the application menu or run `~/.local/bin/readero examples/quiet-reading.md`. The launcher uses the installed absolute path, so it works even if `~/.local/bin` is absent from your shell's `PATH`. Desktop caches are refreshed when the relevant utilities are available; log out and in if your desktop does not discover the new launcher immediately. Open With integration is registered without changing your default reader.
+
+Every `make install` asks Cargo to build the current source in release mode with `--locked` and the ordinary desktop features. Cargo reuses unchanged build work. No pre-existing binary or old `.deb` in `dist/` is selected, and a previous smoke build is replaced by an ordinary build. The executable is replaced atomically, allowing an open Readero session to continue; restart it to use the new version.
+
+### Install the latest source
+
+```sh
+make update          # fast-forward the tracked branch, then rebuild and install
+# `make upgrade` is an alias
+```
+
+“Latest” means the newest commit on the current branch's configured upstream, not the newest release tag. Updates require a clean checkout (including untracked files), an attached branch, and an upstream; local changes and divergent history are never reset, stashed, or rebased automatically. For a checkout without an upstream, use `make install` for its current code, or configure your source remote and tracking branch before `make update`. Network or build failures stop installation; a build failure after a successful pull leaves the source updated and the installed app intact.
+
+Application updates preserve `Cargo.lock` and the deliberately pinned native bindings/renderer assets. They do not run `cargo update` or upgrade those components independently. Run `make deps` and `make toolchain` when you want to refresh Ubuntu build packages and stable Rust.
+
+### Install locations and packages
+
+```sh
+make install PREFIX="$HOME/.local"                    # default user installation
+make install PREFIX=/usr DESTDIR=/tmp/readero-stage  # build a staging tree without sudo
+make package                                         # create dist/readero_<version>_<arch>.deb
+make install-deb                                     # build, then apt-install that exact package (sudo)
+make uninstall                                       # remove the default user installation
+```
+
+`PREFIX` and `DESTDIR` must be absolute paths. Staging does not refresh host desktop caches and its launcher points to the final prefix, not the staging directory. For another prefix, use the same `PREFIX` when uninstalling. Custom desktop data locations may need to be added to `XDG_DATA_DIRS`. For system-wide installation, prefer `make install-deb` over running the build with sudo. If switching from the user installation to a package, first run `make uninstall` to avoid a user launcher shadowing the packaged version. Remove a package with `sudo apt remove readero`.
+
+Packages use the version from `Cargo.toml`, the host architecture from dpkg, and runtime dependencies computed by `dpkg-shlibdeps`; cross-packaging is not supported. `make install-deb` supports rebuilding and reinstalling the same app version. `make uninstall` removes only the app's installed files and preserves reading history and bookmarks. `make clean` removes Cargo build products, leaving the installed app, `dist/`, and reading data intact.
+
+Override `CARGO_TARGET_DIR` or `DIST_DIR` to relocate build products or packages. `CARGO` and `PYTHON` accept executable paths (not shell command strings). Example: `make package LOCAL_DEPS=1 CARGO_TARGET_DIR=/tmp/readero-target DIST_DIR=/tmp/readero-dist`.
 
 ![Readero reading view](docs/screenshots/reading.png)
 
@@ -39,25 +68,28 @@ Notes, highlights, OCR, cloud sync, DRM, fixed-layout EPUB guarantees, PDF forms
 
 ## Build
 
-Rust 1.98 and the following Ubuntu development packages are needed:
+`make doctor` checks Rust against `Cargo.toml` (currently 1.98) and the native library minimums: GTK 4.14, libadwaita 1.5, WebKitGTK 2.42, Papers View 49, and SQLite 3.34.1. To build without installing, use `make build`; `make run` builds and opens the app. The equivalent manual setup is:
 
 ```sh
 sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
   libwebkitgtk-6.0-dev libpapers-dev libsqlite3-dev
 cargo build --locked --release
-./scripts/package-deb
+make package
 ```
 
 For the current workspace, development packages were checksum-verified and extracted under `/tmp`; no system packages were installed. Reproduce that optional setup with:
 
 ```sh
-python3 scripts/prepare-local-build.py
-./scripts/cargo-local build --locked --release
+make local-deps
+make doctor LOCAL_DEPS=1
+make install LOCAL_DEPS=1
 ```
 
-`cargo-local` is a machine-specific convenience wrapper for that temporary prefix. Ordinary installations should use Cargo directly. The native runtime remains the Ubuntu-provided one.
+`LOCAL_DEPS=1` uses `scripts/cargo-local`, a machine-specific wrapper for that temporary prefix and the cached Cargo registry at `/tmp/readero-research/cargo-home` (override with `READERO_CARGO_HOME`). It applies the same environment to preflight checks and Cargo. Existing matching Ubuntu runtime libraries, a compiler, Rust, Python, and package metadata are still required. Temporary files may disappear after reboot; rerun `make local-deps` if needed. Ordinary installations should use `make setup` instead. The native runtime remains the Ubuntu-provided one.
 
 ## Check the implementation
+
+`make check` runs formatting, strict Clippy, Rust tests, and installer tests. `make test-core` runs Rust tests without the desktop development packages; SQLite development headers are still required. `make test-install` checks installation in temporary directories and update safeguards using temporary Git repositories. All Cargo targets support `LOCAL_DEPS=1`. The individual Rust checks are:
 
 ```sh
 cargo fmt --package readero --check

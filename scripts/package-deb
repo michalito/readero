@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 022
 readero_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 readero_version=$(python3 -c 'import pathlib,tomllib,sys; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text())["package"]["version"])' "$readero_root/Cargo.toml")
+readero_binary=${1:-$readero_root/target/release/readero}
+readero_dist=${2:-$readero_root/dist}
+readero_arch=$(dpkg --print-architecture)
 readero_stage=$(mktemp -d /tmp/readero-package.XXXXXX)
 trap 'rm -rf -- "$readero_stage"' EXIT
 chmod 755 "$readero_stage"
-install -Dm755 "$readero_root/target/release/readero" "$readero_stage/usr/bin/readero"
-install -Dm644 "$readero_root/data/io.github.readero.Readero.desktop" "$readero_stage/usr/share/applications/io.github.readero.Readero.desktop"
-install -Dm644 "$readero_root/data/io.github.readero.Readero.svg" "$readero_stage/usr/share/icons/hicolor/scalable/apps/io.github.readero.Readero.svg"
-install -Dm644 "$readero_root/vendor/PAPERS-COPYING" "$readero_stage/usr/share/doc/readero/PAPERS-COPYING"
-install -Dm644 "$readero_root/assets/foliate/LICENSE" "$readero_stage/usr/share/doc/readero/FOLIATE-LICENSE"
-install -Dm644 "$readero_root/examples/quiet-reading.md" "$readero_stage/usr/share/doc/readero/quiet-reading.md"
-mkdir -p "$readero_stage/DEBIAN" "$readero_root/dist"
+python3 "$readero_root/scripts/local-install.py" install --binary "$readero_binary" --prefix /usr --destdir "$readero_stage"
+mkdir -p "$readero_stage/DEBIAN" "$readero_dist"
 mkdir -p "$readero_stage/debian/readero/DEBIAN"
 cat > "$readero_stage/debian/control" <<CONTROL
 Source: readero
@@ -20,7 +19,7 @@ Priority: optional
 Maintainer: Readero contributors
 
 Package: readero
-Architecture: amd64
+Architecture: $readero_arch
 Description: A quiet native document reader for Ubuntu
 CONTROL
 cp -a "$readero_stage/usr" "$readero_stage/debian/readero/"
@@ -30,7 +29,7 @@ rm -rf -- "$readero_stage/debian"
 cat > "$readero_stage/DEBIAN/control" <<CONTROL
 Package: readero
 Version: $readero_version
-Architecture: amd64
+Architecture: $readero_arch
 Maintainer: Readero contributors
 Section: text
 Priority: optional
@@ -39,4 +38,4 @@ Description: A quiet native document reader for Ubuntu
  Read local PDF, EPUB and Markdown documents with remembered positions,
  optional focus mode, bookmarks, search and adjustable reading appearance.
 CONTROL
-dpkg-deb --root-owner-group --build "$readero_stage" "$readero_root/dist/readero_${readero_version}_amd64.deb"
+dpkg-deb --root-owner-group --build "$readero_stage" "$readero_dist/readero_${readero_version}_${readero_arch}.deb"

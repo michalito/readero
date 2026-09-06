@@ -2,6 +2,14 @@
 
 5 September 2026 · Readero 0.1.1 personal preview
 
+## Local installation validation · 6 September 2026
+
+The Make workflow adds dependency preflight, release builds, user-local installation, safe upstream updates, Debian packaging, and uninstall without removing reading data. The current [validation record](qa/local-install-validation.json) includes 19 desktop Rust tests, 18 core-only tests (a subset run without desktop features), 10 installer tests, formatting/Clippy/syntax checks, and 655 native assertions across nine synthetic-document flows. It also records AT-SPI, Wayland crash/database recovery, readiness timing, and idle-resource observations.
+
+The package was rebuilt from ordinary desktop features, compared with the release executable, checked for resolved runtime libraries and a valid launcher, and accepted by an apt installation simulation. Staged installation, uninstall, and isolated build cleanup were exercised. Actual system package installation and dependency/toolchain setup were not applied to the host during this validation.
+
+The accessibility test exposed a traversal race when WebKit replaced a loading tree. The test now skips null AT-SPI children, and the complete accessibility check passed after that correction. The broader manual and performance qualification gates below remain open.
+
 ## Delivered behavior
 
 A working Rust/GTK4/libadwaita application opens PDF, EPUB, and Markdown directly. It has a quiet recent-documents home, per-document Scroll/Pages and reading appearance, versioned passage locators, transactional progress/bookmarks, contents/search, Back/Forward, focus, fullscreen, PDF zoom/rotation/page entry, image inspection, and source watching for Markdown. The optimized binary and Ubuntu package are built locally; no system packages or default document associations were changed.

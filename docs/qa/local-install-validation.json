@@ -1,0 +1,134 @@
+{
+  "date": "2026-09-06",
+  "version": "0.1.1",
+  "platform": "Ubuntu 26.04.1 amd64; Rust 1.98.0; Papers 50.2",
+  "build_environment": "LOCAL_DEPS=1; extracted development libraries with Ubuntu runtime libraries",
+  "rust_tests": {
+    "desktop": 19,
+    "core_only": 18,
+    "passed": true,
+    "note": "Core-only tests repeat the desktop suite without desktop features."
+  },
+  "installer_tests": {
+    "count": 10,
+    "passed": true
+  },
+  "static_checks": {
+    "rustfmt": true,
+    "clippy_with_smoke": true,
+    "authored_javascript_syntax": true,
+    "python_compile": true,
+    "bash_syntax": true,
+    "git_diff_check": true
+  },
+  "packaging": {
+    "release_build": true,
+    "staged_install_and_uninstall": true,
+    "isolated_cargo_clean": true,
+    "desktop_entry_valid": true,
+    "runtime_libraries_resolved": true,
+    "deb_matches_release_binary": true,
+    "smoke_hooks_excluded": true,
+    "apt_install_simulation": true,
+    "actual_system_install_performed": false,
+    "binary_sha256": "30f9b217f129aa924f060774d15b81cf76e1fa5e058299837a577a46de3bd832"
+  },
+  "native_smoke": {
+    "pdf": {
+      "passed": true,
+      "assertions": 35
+    },
+    "epub-stress": {
+      "passed": true,
+      "assertions": 105
+    },
+    "markdown-edit": {
+      "passed": true,
+      "assertions": 130
+    },
+    "mixed-pdf": {
+      "passed": true,
+      "assertions": 35
+    },
+    "svg-cover": {
+      "passed": true,
+      "assertions": 103
+    },
+    "storage-failure": {
+      "passed": true,
+      "assertions": 4
+    },
+    "adversarial": {
+      "passed": true,
+      "assertions": 103
+    },
+    "protected-pdf": {
+      "passed": true,
+      "assertions": 37
+    },
+    "rapid-open": {
+      "passed": true,
+      "assertions": 103
+    }
+  },
+  "network": {
+    "count": 0,
+    "passed": true
+  },
+  "restart": {
+    "kind": "restart",
+    "surface": "native Wayland",
+    "instrumentation": "optimized native app with opt-in readiness probe; not frame-time or input-latency qualification",
+    "sigkill_keeps_committed_position_settings_bookmarks": true,
+    "interrupted_writer_had_rollback_journal": true,
+    "killed_writer_recovers_previous_commit": true,
+    "database_integrity_ok": true,
+    "close_during_layout_keeps_position_settings_bookmarks": true
+  },
+  "accessibility": {
+    "native_controls_exposed": true,
+    "semantic_heading_exposed": true,
+    "publication_text_exposed": true,
+    "page_mode_named": true,
+    "appearance_named": true,
+    "scope": "AT-SPI tree inspection only; not an Orca usability session"
+  },
+  "timing": {
+    "fixture": "original Markdown tour",
+    "launch_readiness": {
+      "n": 10,
+      "median_ms": 1397.691578,
+      "p95_ms": 1477.868659,
+      "max_ms": 1477.868659
+    },
+    "warm_readiness": {
+      "n": 30,
+      "median_ms": 481.96182799999997,
+      "p95_ms": 526.86846,
+      "max_ms": 539.6088020000001
+    },
+    "cache_condition": "OS cache not cleared; each process launch includes a private D-Bus session"
+  },
+  "idle": {
+    "fixture": "synthetic 12-section EPUB",
+    "seconds": 119.2547171030019,
+    "one_cpu_percent": 0.050312475227438765,
+    "start_pss_mib": 239.6025390625,
+    "end_pss_mib": 239.7802734375,
+    "peak_pss_mib": 241.2255859375,
+    "processes": 8,
+    "gpu_memory": "not measured",
+    "activity_before_idle": "40 turns and 20 mode changes",
+    "baseline_pss_mib": 231.6044921875,
+    "growth_within_budget": true
+  },
+  "fixes": [
+    "Accessibility traversal skips null AT-SPI children while WebKit replaces its loading tree."
+  ],
+  "limitations": [
+    "Timing and idle observations are diagnostic, not full PRD performance qualification.",
+    "AT-SPI inspection does not replace Orca usability testing.",
+    "System dependency/toolchain setup was not applied to the host; package installation was simulated.",
+    "Broader corpus, display-scale, long-session and owner reading qualification remain as documented in IMPLEMENTATION.md."
+  ]
+}

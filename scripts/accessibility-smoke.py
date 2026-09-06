@@ -14,7 +14,8 @@ from gi.repository import Atspi, GLib
 
 
 def walk(node, depth=0):
-    if depth > 30:
+    # AT-SPI may return a null child while WebKit replaces its loading tree.
+    if node is None or depth > 30:
         return []
     rows = []
     try:
