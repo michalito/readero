@@ -787,15 +787,15 @@ impl Shell {
     }
 
     pub(super) fn history(self: &Rc<Self>, forward: bool) {
-        if !self.prepare_navigation() {
-            return;
-        }
         let mut back = self.back.borrow().clone();
         let mut ahead = self.forward.borrow().clone();
         let target = if forward { ahead.pop() } else { back.pop() };
         let Some(target) = target else {
             return;
         };
+        if !self.prepare_navigation() {
+            return;
+        }
         if let Some(record) = self.record_for_save()
             && let Some(locator) = record.locator
         {

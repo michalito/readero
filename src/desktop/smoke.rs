@@ -1078,6 +1078,18 @@ impl Shell {
                 && self.record_for_save().is_none()
                 && self.content().visible_child_name().as_deref() == Some("home")
         );
+        for forward in [false, true] {
+            self.home();
+            let delay = self.reading_state.barrier(Duration::from_millis(700));
+            self.open(original.path.clone());
+            self.history(forward);
+            checks[format!("empty_history_keeps_first_open_{forward}")] = json!(self.is_opening());
+            delay.await.expect("delayed first open");
+            if self.is_opening() {
+                self.wait_ready().await;
+            }
+            checks[format!("empty_history_first_open_finishes_{forward}")] = json!(self.is_ready());
+        }
         self.open(original.path.clone());
         self.wait_ready().await;
         self.renderer_diagnostics().await;
