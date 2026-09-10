@@ -54,19 +54,14 @@ impl Shell {
                     shell.save();
                 }
             }
-            shell.worker.call(|_| Ok(())).await.unwrap();
+            shell.reading_state.barrier(Duration::ZERO).await.unwrap();
             let record = shell
                 .record_for_save()
                 .expect("native probe must reach a readable document");
             let id = record.id.clone();
             report["record"] = json!(record);
-            report["bookmark_count"] = json!(
-                shell
-                    .worker
-                    .call(move |store| Ok(store.bookmarks(&id)?.len()))
-                    .await
-                    .unwrap()
-            );
+            report["bookmark_count"] =
+                json!(shell.reading_state.bookmarks(id).await.unwrap().len());
             write(&directory.join("report.json"), &report);
             if mode == "crash" {
                 pause(120_000).await;
@@ -106,7 +101,7 @@ impl Shell {
     async fn probe_ready(&self) {
         let deadline = Instant::now() + Duration::from_secs(30);
         while Instant::now() < deadline {
-            if !self.opening.get() && self.gate.borrow().accepts(self.generation.get()) {
+            if !self.is_opening() && self.is_ready() {
                 let (view, pdf) = match self.surface.borrow().as_ref() {
                     Some(Surface::Reflow(reader)) => (Some(reader.view.clone()), false),
                     Some(Surface::Pdf(_)) => (None, true),

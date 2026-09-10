@@ -2,6 +2,20 @@
 
 5 September 2026 · Readero 0.1.1 personal preview
 
+## Document opening and reload ownership · 10 September 2026
+
+Document opening now owns complete requests, candidate readers and password dialogs, readiness, cancellation, history commitment, directory monitoring, and deferred source changes in `desktop/shell/opening.rs`. Markdown reload retains the working reader until its replacement finishes native layout; startup failure restores that reader and reports the failure immediately. A newer edit during preparation is retained, and reopening the same document captures the latest position and appearance. Home and Close reject late completions; a failed close resumes deferred source changes only after Keep open is chosen.
+
+The [validation record](qa/document-opening-validation.json) records a native red run reproducing loss of the working reader and available reading state after an injected WebKit startup failure, followed by 308 passing native assertions across Markdown source edits, EPUB with rapid replacement, encrypted PDF, and unavailable storage. The expanded checks cover edits during startup, stale readiness and password responses, navigation superseding an opening, and source changes during failed close. All 28 Rust tests pass with and without desktop features, formatting and strict Clippy pass, and the ordinary release executable was rebuilt without smoke hooks. The removed standalone SaveGate test is replaced by native opening-interface coverage. A final review also reproduced and fixed document actions bypassing the mapped-candidate guard and a failed close retaining an older in-memory position than its successful renderer checkpoint. These are functional checks using synthetic fixtures and private X11 displays, not new performance or Wayland qualification.
+
+## Reading-state ownership · 9 September 2026
+
+The reading-state module now owns retained saves, identity reconciliation, Locate, recents removal, and bookmark-save ordering on one worker. The shell supplies stable positions and presents the latest save status; delayed replies do not restore obsolete errors or discard newer progress. The database schema, locator format, debounce policy, and shutdown checkpoint behavior are preserved.
+
+The [validation record](qa/reading-state-validation.json) records 29 passing Rust tests with and without desktop features, including 11 new reading-state scenarios using real temporary SQLite databases. Formatting, strict Clippy, 10 installer tests, and 284 native assertions passed across Markdown with source edits, EPUB, PDF, and unavailable-storage flows. These are functional regression checks, not a new performance or release qualification.
+
+A follow-up review reproduced delayed bookmark and recents-removal failures whose feedback disappeared after a later successful save. Explicit action failures now produce their own high-priority toast while the save banner reflects current status. Native checks hold GTK callbacks until both operations finish, then verify visible failure feedback and unchanged stored outcomes.
+
 ## Local installation validation · 6 September 2026
 
 The Make workflow adds dependency preflight, release builds, user-local installation, safe upstream updates, Debian packaging, and uninstall without removing reading data. The current [validation record](qa/local-install-validation.json) includes 19 desktop Rust tests, 18 core-only tests (a subset run without desktop features), 10 installer tests, formatting/Clippy/syntax checks, and 655 native assertions across nine synthetic-document flows. It also records AT-SPI, Wayland crash/database recovery, readiness timing, and idle-resource observations.
@@ -16,10 +30,12 @@ A working Rust/GTK4/libadwaita application opens PDF, EPUB, and Markdown directl
 
 The [PRD](MVP_PRD.md) remains the acceptance baseline. This preview is ready for owner evaluation, not a declaration that every release gate has passed. Highlights and the linked notebook remain deliberately deferred.
 
-## Code boundaries
+## Module ownership
 
-- `document.rs` defines durable identity, settings, locators, validation, and the generation/ready save gate.
-- `state.rs` owns schema v1, transactional record updates, bookmarks, recents, and relinking. The dedicated state worker serializes database access away from GTK.
+- `document.rs` defines durable identity, settings, locators, and validation.
+- `desktop/shell/opening.rs` owns candidate preparation, native readiness and cancellation, history/link requests, source watching, deferred reloads, and Home/Close transitions. Active reading state remains saveable until a replacement is ready; candidate failure retains the working reader. Its private state replaces the standalone save gate and caller-managed pending fields.
+- `reading_state.rs` owns save retries, provisional identity reconciliation, Locate, recents removal, and bookmark-save ordering on one worker. Operations enter its queue before their replies are awaited, and retained snapshots are independent of reply delivery. The shell supplies stable positions, debounce timers, and presentation; it reads the latest save status instead of replaying status from delayed replies.
+- `state.rs` owns schema v1 and the SQLite implementation: transactional record updates, bookmarks, recents, and relinking. Reading state uses this implementation directly, including real temporary SQLite databases in its tests.
 - `resource.rs` validates archive/resource limits and serves only capability-scoped resources. Markdown sidecars resolve within the source directory after canonicalization; EPUBs are not extracted to disk.
 - `markdown.rs` renders the defined dialect and creates stable content-block IDs with source offsets.
 - `desktop/pdf.rs` adapts Papers models, native page coordinates, async loading, search, and settled restoration.

@@ -41,7 +41,7 @@ cairo-sys-rs = "0.21"
 
 [features]
 default = ["desktop"]
-desktop = ["dep:gtk", "dep:adw", "dep:webkit6", "dep:papers-view", "dep:papers-document", "dep:async-channel"]
+desktop = ["dep:gtk", "dep:adw", "dep:webkit6", "dep:papers-view", "dep:papers-document"]
 smoke = ["desktop"]
 
 [dependencies]
@@ -50,7 +50,7 @@ adw = { package = "libadwaita", version = "=0.8.1", features = ["v1_5"], optiona
 webkit6 = { version = "=0.5.0", features = ["v2_42"], optional = true }
 papers-view = { workspace = true, features = ["v49"], optional = true }
 papers-document = { workspace = true, optional = true }
-async-channel = { version = "2.5", optional = true }
+async-channel = "2.5"
 pulldown-cmark = "=0.13.4"
 rusqlite = "=0.40.2"
 serde = { version = "1", features = ["derive"] }

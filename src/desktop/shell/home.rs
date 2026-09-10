@@ -5,6 +5,14 @@ impl Shell {
         self.toasts.add_toast(adw::Toast::new(message));
     }
 
+    pub(super) fn action_error(&self, message: &str, error: &Error) {
+        let toast = adw::Toast::new(&format!("{message} {error}"));
+        // Explicit actions need feedback even when an unrelated save has
+        // already recovered and other reading notices are queued.
+        toast.set_priority(adw::ToastPriority::High);
+        self.toasts.add_toast(toast);
+    }
+
     pub(super) fn show_status(&self, title: &str, description: &str, loading: bool) {
         if let Some(old) = self.content().child_by_name("status") {
             self.content().remove(&old);
@@ -31,38 +39,6 @@ impl Shell {
     pub(super) fn error(&self, message: &str) {
         self.set_reading(false);
         self.show_status("Couldn’t open this document", message, false);
-    }
-
-    pub(super) fn home(self: &Rc<Self>) {
-        self.cancel_open();
-        self.save();
-        self.dispose_surface();
-        self.current.replace(None);
-        let generation = self.gate.borrow_mut().begin();
-        self.generation.set(generation);
-        if self.focus.get() {
-            self.focus.set(false);
-            self.object::<adw::HeaderBar>("header").set_visible(true);
-        }
-        self.set_reading(false);
-        self.window.set_title(Some("Readero"));
-        self.render_home(&[]);
-        let serial = self.open_serial.get();
-        let worker = self.worker.clone();
-        let weak = Rc::downgrade(self);
-        glib::MainContext::default().spawn_local(async move {
-            let result = worker.call(|store| store.recents()).await;
-            let Some(s) = weak.upgrade() else {
-                return;
-            };
-            if !s.is_current(generation) || !s.is_open(serial) {
-                return;
-            }
-            match result {
-                Ok(recents) => s.render_home(&recents),
-                Err(error) => s.storage_error(&error.to_string()),
-            }
-        });
     }
 
     pub(super) fn render_home(self: &Rc<Self>, recents: &[DocumentRecord]) {
@@ -255,48 +231,24 @@ impl Shell {
     }
     fn remove_recent_button(self: &Rc<Self>, id: String, path: PathBuf) -> gtk::Button {
         let remove = icon_button("list-remove-symbolic", "Remove from recents");
-        let worker = self.worker.clone();
         let weak = Rc::downgrade(self);
-        let generation = self.generation.get();
-        let serial = self.open_serial.get();
+        let stamp = self.view_stamp();
         remove.connect_clicked(move |_| {
-            let worker = worker.clone();
             let weak = std::rc::Weak::clone(&weak);
             let id = id.clone();
             let Some(s) = weak.upgrade() else {
                 return;
             };
-            // Cancel retained retries before queuing hide, so Home and Close
-            // cannot resurrect this recent. Include provisional session IDs.
-            let mut removed = Vec::new();
-            s.unsaved.borrow_mut().retain(|saved_path, snapshot| {
-                if saved_path == &path || snapshot.1.id == id {
-                    removed.push((saved_path.clone(), snapshot.clone()));
-                    false
-                } else {
-                    true
-                }
-            });
-            let pending = worker.call(move |store| store.hide(&id));
+            let pending = s.reading_state.remove_recent(id, path.clone());
             glib::MainContext::default().spawn_local(async move {
                 let result = pending.await;
                 if let Some(s) = weak.upgrade() {
+                    s.refresh_storage();
                     match result {
-                        Ok(()) => {
-                            if s.unsaved.borrow().is_empty() {
-                                s.object::<adw::Banner>("save_banner").set_revealed(false);
-                            }
-                            if s.is_current(generation) && s.is_open(serial) {
-                                s.home();
-                            }
-                        }
+                        Ok(()) if s.is_view(stamp) => s.home(),
+                        Ok(()) => {}
                         Err(error) => {
-                            let mut unsaved = s.unsaved.borrow_mut();
-                            for (path, snapshot) in removed {
-                                unsaved.entry(path).or_insert(snapshot);
-                            }
-                            drop(unsaved);
-                            s.storage_error(&error.to_string());
+                            s.action_error("Couldn’t remove this document from recents.", &error)
                         }
                     }
                 }

@@ -1,7 +1,10 @@
 use super::*;
 
 impl Shell {
-    pub(super) fn turn(&self, next: bool) {
+    pub(super) fn turn(self: &Rc<Self>, next: bool) {
+        if !self.prepare_navigation() {
+            return;
+        }
         match self.surface.borrow().as_ref() {
             Some(Surface::Pdf(pdf)) => {
                 if next {
@@ -18,6 +21,9 @@ impl Shell {
     }
 
     pub(super) fn goto(self: &Rc<Self>, target: Destination, remember: bool) {
+        if !self.prepare_navigation() {
+            return;
+        }
         if remember && let Some(locator) = self.record_for_save().and_then(|r| r.locator) {
             self.push_history(locator);
         }
@@ -38,77 +44,10 @@ impl Shell {
         self.sync_controls();
     }
 
-    pub(super) fn push_history(&self, locator: Locator) {
-        let Some(record) = self.current.borrow().clone() else {
-            return;
-        };
-        let entry = HistoryEntry {
-            path: record.path,
-            locator,
-            settings: record.settings,
-        };
-        let mut back = self.back.borrow_mut();
-        if back.last() != Some(&entry) {
-            back.push(entry);
-            if back.len() > 100 {
-                back.remove(0);
-            }
-        }
-        self.forward.borrow_mut().clear();
-    }
-
-    pub(super) fn history(self: &Rc<Self>, forward: bool) {
-        let original_back = self.back.borrow().clone();
-        let original_forward = self.forward.borrow().clone();
-        let target = if forward {
-            self.forward.borrow_mut().pop()
-        } else {
-            self.back.borrow_mut().pop()
-        };
-        let Some(target) = target else {
-            return;
-        };
-        if let Some(record) = self.record_for_save()
-            && let Some(locator) = record.locator
-        {
-            let current = HistoryEntry {
-                path: record.path,
-                locator,
-                settings: record.settings,
-            };
-            if forward {
-                self.back.borrow_mut().push(current);
-            } else {
-                self.forward.borrow_mut().push(current);
-            }
-        }
-        let same_document = self
-            .current
-            .borrow()
-            .as_ref()
-            .is_some_and(|r| r.path == target.path);
-        if same_document {
-            if self
-                .current
-                .borrow()
-                .as_ref()
-                .is_some_and(|r| r.settings != target.settings)
-            {
-                self.change_settings(|settings| *settings = target.settings.clone());
-            }
-            self.goto(Destination::Locator(target.locator), false);
-        } else {
-            let back = self.back.take();
-            let forward = self.forward.take();
-            self.open(target.path.clone());
-            self.pending_location.replace(Some(target));
-            self.pending_history.replace(Some((back, forward)));
-            self.back.replace(original_back);
-            self.forward.replace(original_forward);
-        }
-    }
-
     pub(super) fn show_search(&self) {
+        if !self.can_interact() {
+            return;
+        }
         self.sidebar().set_reveal_child(true);
         self.object::<gtk::DropDown>("sidebar_kind").set_selected(2);
         self.entry().set_visible(true);
@@ -170,6 +109,9 @@ impl Shell {
     }
 
     pub(super) fn search(self: &Rc<Self>, query: &str) {
+        if !self.can_interact() {
+            return;
+        }
         self.search_index.set(-1);
         let remember = !query.is_empty()
             && match self.surface.borrow().as_ref() {
@@ -195,6 +137,9 @@ impl Shell {
     }
 
     pub(super) fn next_search_result(&self, next: bool) {
+        if !self.can_interact() {
+            return;
+        }
         if self.object::<gtk::DropDown>("sidebar_kind").selected() != 2 {
             return;
         }
@@ -249,39 +194,35 @@ impl Shell {
     }
 
     pub(super) fn bookmark(self: &Rc<Self>) {
+        if !self.can_interact() {
+            return;
+        }
         let Some(record) = self.record_for_save() else {
             return;
         };
         let Some(locator) = record.locator.clone() else {
             return;
         };
-        let mut bookmark = Bookmark {
+        let bookmark = Bookmark {
             id: uuid::Uuid::new_v4().to_string(),
             document_id: record.id.clone(),
             label: locator.label(),
             locator,
         };
-        let worker = self.worker.clone();
+        let pending = self.reading_state.bookmark(record, bookmark);
         let weak = Rc::downgrade(self);
-        let session_id = record.id.clone();
         glib::MainContext::default().spawn_local(async move {
-            let result = worker
-                .call(move |store| {
-                    bookmark.document_id = store.save_session(&record)?;
-                    store.add_bookmark(&bookmark)?;
-                    Ok(bookmark.document_id)
-                })
-                .await;
+            let result = pending.await;
             if let Some(s) = weak.upgrade() {
+                s.refresh_storage();
                 match result {
-                    Ok(id) => {
-                        s.reconnect_identity(&session_id, id);
+                    Ok(()) => {
                         s.toast("Passage bookmarked");
                         if s.object::<gtk::DropDown>("sidebar_kind").selected() == 1 {
                             s.show_bookmarks();
                         }
                     }
-                    Err(error) => s.storage_error(&error.to_string()),
+                    Err(error) => s.action_error("Couldn’t bookmark this passage.", &error),
                 }
             }
         });
@@ -291,11 +232,11 @@ impl Shell {
         let Some(id) = self.current.borrow().as_ref().map(|r| r.id.clone()) else {
             return;
         };
-        let worker = self.worker.clone();
         let weak = Rc::downgrade(self);
-        let generation = self.generation.get();
+        let generation = self.generation();
+        let pending = self.reading_state.bookmarks(id);
         glib::MainContext::default().spawn_local(async move {
-            let result = worker.call(move |store| store.bookmarks(&id)).await;
+            let result = pending.await;
             let Some(s) = weak.upgrade() else {
                 return;
             };
@@ -326,16 +267,15 @@ impl Shell {
                                 s.goto(Destination::Locator(locator.clone()), true);
                             }
                         });
-                        let worker = s.worker.clone();
+                        let reading_state = s.reading_state.clone();
                         let weak = Rc::downgrade(&s);
                         let id = bookmark.id;
                         remove.connect_clicked(move |_| {
-                            let worker = worker.clone();
+                            let reading_state = reading_state.clone();
                             let weak = std::rc::Weak::clone(&weak);
                             let id = id.clone();
                             glib::MainContext::default().spawn_local(async move {
-                                let result =
-                                    worker.call(move |store| store.remove_bookmark(&id)).await;
+                                let result = reading_state.remove_bookmark(id).await;
                                 if let Some(s) = weak.upgrade() {
                                     if let Err(error) = result {
                                         s.storage_error(&error.to_string());
@@ -359,38 +299,6 @@ impl Shell {
             .is_ok_and(|url| matches!(url.scheme(), "https" | "http" | "mailto"))
         {
             gtk::UriLauncher::new(href).launch(Some(&self.window), gio::Cancellable::NONE, |_| {});
-        }
-    }
-
-    pub(super) fn related(self: &Rc<Self>, href: &str) {
-        let path = self
-            .current
-            .borrow()
-            .as_ref()
-            .and_then(|r| r.path.parent().map(|root| root.to_path_buf()));
-        if let Some(root) = path
-            && let Ok(relative) =
-                readero::resource::resource_path(href.split('#').next().unwrap_or(href))
-        {
-            let path = root.join(relative);
-            if path.canonicalize().is_ok_and(|p| p.starts_with(&root)) {
-                let mut back = self.back.borrow().clone();
-                if let Some(record) = self.record_for_save()
-                    && let Some(locator) = record.locator
-                {
-                    back.push(HistoryEntry {
-                        path: record.path,
-                        locator,
-                        settings: record.settings,
-                    });
-                }
-                self.open(path);
-                if let Some((_, fragment)) = href.split_once('#') {
-                    self.pending_href
-                        .replace(Some(format!("content.xhtml#{fragment}")));
-                }
-                self.pending_history.replace(Some((back, Vec::new())));
-            }
         }
     }
 }

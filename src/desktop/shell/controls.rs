@@ -137,6 +137,9 @@ impl Shell {
     }
 
     pub(super) fn change_settings(self: &Rc<Self>, change: impl FnOnce(&mut Settings)) {
+        if !self.can_interact() {
+            return;
+        }
         let settings = {
             let mut current = self.current.borrow_mut();
             let Some(record) = current.as_mut() else {
@@ -158,6 +161,9 @@ impl Shell {
     }
 
     pub(super) fn toggle_focus(&self) {
+        if !self.can_interact() {
+            return;
+        }
         if self.surface.borrow().is_none() {
             return;
         }
@@ -176,7 +182,10 @@ impl Shell {
     }
 
     pub(super) fn escape(&self) {
-        if self.gate.borrow().accepts(self.generation.get())
+        if !self.can_interact() {
+            return;
+        }
+        if self.is_ready()
             && let Some(Surface::Reflow(reflow)) = self.surface.borrow().as_ref()
         {
             reflow.command(serde_json::json!({"type":"escape"}));
@@ -351,6 +360,9 @@ impl Shell {
         let close = popover.clone();
         entry.connect_activate(move |entry| {
             if let Some(s) = weak.upgrade() {
+                if !s.prepare_navigation() {
+                    return;
+                }
                 if let Some(locator) = s.record_for_save().and_then(|r| r.locator) {
                     s.push_history(locator);
                 }
@@ -446,6 +458,23 @@ impl Shell {
             };
             let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
             let alt = state.contains(gdk::ModifierType::ALT_MASK);
+            let document_action = (ctrl
+                && matches!(
+                    key,
+                    gdk::Key::f
+                        | gdk::Key::F
+                        | gdk::Key::g
+                        | gdk::Key::G
+                        | gdk::Key::d
+                        | gdk::Key::D
+                        | gdk::Key::l
+                        | gdk::Key::L
+                ))
+                || (alt && matches!(key, gdk::Key::Left | gdk::Key::Right))
+                || matches!(key, gdk::Key::F8 | gdk::Key::F9);
+            if document_action && !s.can_interact() {
+                return glib::Propagation::Stop;
+            }
             let handled = match key {
                 gdk::Key::o | gdk::Key::O if ctrl => {
                     s.open_dialog(None);

@@ -11,6 +11,21 @@ use std::sync::{
 use webkit6::{self as webkit, prelude::*};
 
 pub const WORLD: &str = "readero-private-v1";
+#[cfg(feature = "smoke")]
+thread_local! {
+    static FAIL_NEXT_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static START_DELAY_MS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(feature = "smoke")]
+pub fn fail_next_start() {
+    FAIL_NEXT_START.set(true);
+}
+
+#[cfg(feature = "smoke")]
+pub fn delay_next_start(milliseconds: u64) {
+    START_DELAY_MS.set(milliseconds);
+}
 const POLICY: &str = "default-src 'none'; script-src readero:; style-src 'unsafe-inline' readero:; img-src blob: data: readero:; font-src blob: data: readero:; connect-src readero:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'";
 
 #[derive(Clone, Deserialize)]
@@ -173,6 +188,19 @@ impl Reflow {
         let boot = format!(
             "import('readero://app/reader.js').then(m => m.start({config}, value => window.webkit.messageHandlers.readero.postMessage(value))).catch(e => window.webkit.messageHandlers.readero.postMessage(JSON.stringify({{generation:{generation},type:'error',message:e.message}})));"
         );
+        #[cfg(feature = "smoke")]
+        let boot = if FAIL_NEXT_START.replace(false) {
+            format!(
+                "window.webkit.messageHandlers.readero.postMessage(JSON.stringify({{generation:{generation},type:'error',message:'Injected renderer startup failure'}}));"
+            )
+        } else {
+            boot
+        };
+        #[cfg(feature = "smoke")]
+        let boot = match START_DELAY_MS.replace(0) {
+            0 => boot,
+            delay => format!("setTimeout(() => {{ {boot} }}, {delay});"),
+        };
         manager.add_script(&webkit::UserScript::for_world(
             &boot,
             webkit::UserContentInjectedFrames::TopFrame,

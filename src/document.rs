@@ -260,31 +260,6 @@ pub struct Bookmark {
     pub locator: Locator,
 }
 
-/// Temporary opening/reflow events must never replace a committed passage.
-#[derive(Default, Debug)]
-pub struct SaveGate {
-    generation: u64,
-    ready: bool,
-}
-impl SaveGate {
-    pub fn begin(&mut self) -> u64 {
-        self.generation += 1;
-        self.ready = false;
-        self.generation
-    }
-    pub fn ready(&mut self, generation: u64) {
-        if self.generation == generation {
-            self.ready = true;
-        }
-    }
-    pub fn accepts(&self, generation: u64) -> bool {
-        self.ready && self.generation == generation
-    }
-    pub fn current(&self, generation: u64) -> bool {
-        self.generation == generation
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,17 +276,6 @@ mod tests {
                 ..
             }
         ));
-    }
-    #[test]
-    fn stale_completion_cannot_enable_saving() {
-        let mut gate = SaveGate::default();
-        let a = gate.begin();
-        let b = gate.begin();
-        gate.ready(a);
-        assert!(!gate.accepts(b));
-        gate.ready(b);
-        assert!(gate.accepts(b));
-        assert!(!gate.accepts(a));
     }
     #[test]
     fn locators_reject_unknown_versions_and_nonfinite_coordinates() {
