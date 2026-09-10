@@ -87,6 +87,10 @@ impl Store {
     /// and the authoritative path come from storage; the reader's current
     /// progress and settings win. A retained snapshot must not undo a relink.
     pub fn save_session(&self, record: &DocumentRecord) -> Result<String> {
+        self.save_session_record(record).map(|record| record.id)
+    }
+    pub(crate) fn save_session_record(&self, record: &DocumentRecord) -> Result<DocumentRecord> {
+        let session_id = record.id.clone();
         let transaction = self.connection.unchecked_transaction()?;
         let session_ids = self.session_ids.borrow();
         let id = session_ids.get(&record.id).unwrap_or(&record.id);
@@ -105,7 +109,11 @@ impl Store {
         }
         self.save(&record)?;
         transaction.commit()?;
-        Ok(record.id)
+        drop(session_ids);
+        self.session_ids
+            .borrow_mut()
+            .insert(session_id, record.id.clone());
+        Ok(record)
     }
     pub fn hide(&self, id: &str) -> Result<()> {
         self.connection

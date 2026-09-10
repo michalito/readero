@@ -38,7 +38,7 @@ impl Shell {
                 }
                 shell.wait_ready().await;
                 settle(500).await;
-                let ready = shell.gate.borrow().accepts(shell.generation.get());
+                let ready = shell.is_ready();
                 report["ready"] = json!(ready);
                 report["requested_document_won"] = json!(shell.current.borrow().as_ref()
                     .is_some_and(|record| Some(record.path.clone()) == file.canonicalize().ok()));
@@ -55,7 +55,10 @@ impl Shell {
                     return;
                 }
                 if ready {
+                    let action_errors = shell.check_action_errors(&directory).await;
                     report["regressions"] = shell.check_regressions().await;
+                    report["regressions"].as_object_mut().expect("regression results")
+                        .extend(action_errors.as_object().expect("action error results").clone());
                     if std::env::var_os("READERO_SMOKE_EDIT").is_some() {
                         report["editing"] = shell.check_editing(&directory).await;
                     }
@@ -155,7 +158,7 @@ impl Shell {
                     report["reopened"] = shell.renderer_diagnostics().await;
                     if let Some(record) = after {
                         let id = record.id;
-                        report["bookmark_count"] = json!(shell.worker.call(move |store| Ok(store.bookmarks(&id)?.len())).await.unwrap_or(0));
+                        report["bookmark_count"] = json!(shell.reading_state.bookmarks(id).await.map_or(0, |bookmarks| bookmarks.len()));
                     }
                     if let Some(ms) = std::env::var("READERO_SMOKE_IDLE_MS").ok().and_then(|v| v.parse::<u64>().ok()) {
                         write_json(&directory.join("idle-ready.json"), &json!({"pid":std::process::id()}));
@@ -171,6 +174,86 @@ impl Shell {
             shell.close();
         });
     }
+    async fn check_action_errors(self: &Rc<Self>, directory: &std::path::Path) -> Value {
+        let mut checks = json!({});
+        let record = self
+            .record_for_save()
+            .expect("ready for action error checks");
+        self.reading_state
+            .barrier(Duration::ZERO)
+            .await
+            .expect("drain initial save");
+        let connection = rusqlite::Connection::open(directory.join("state/reading.sqlite3"))
+            .expect("test database");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_bookmark BEFORE INSERT ON bookmarks
+            BEGIN SELECT RAISE(FAIL, 'fixture rejects bookmark'); END;",
+            )
+            .unwrap();
+        self.bookmark();
+        self.save();
+        // Deliberately keep GTK from dispatching either completion until the
+        // later save has cleared global status. No timing race in this fixture.
+        self.reading_state
+            .barrier(Duration::ZERO)
+            .wait()
+            .expect("complete queued actions");
+        assert!(self.reading_state.status().error.is_none());
+        settle(300).await;
+        checks["failed_bookmark_feedback_survives_later_save"] =
+            json!(has_label(&self.window, "Couldn’t bookmark this passage"));
+        checks["failed_bookmark_was_not_inserted"] = json!(
+            self.reading_state
+                .bookmarks(record.id.clone())
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        connection
+            .execute_batch(
+                "DROP TRIGGER reject_bookmark;
+            CREATE TRIGGER reject_removal BEFORE UPDATE OF hidden ON documents
+            WHEN NEW.hidden=1 BEGIN SELECT RAISE(FAIL, 'fixture rejects removal'); END;",
+            )
+            .unwrap();
+        self.home();
+        self.reading_state
+            .barrier(Duration::ZERO)
+            .await
+            .expect("load recents");
+        settle(300).await;
+        assert!(click_button(&self.content(), "Remove from recents"));
+        self.save();
+        self.reading_state
+            .barrier(Duration::ZERO)
+            .wait()
+            .expect("complete queued removal");
+        assert!(self.reading_state.status().error.is_none());
+        settle(300).await;
+        checks["failed_removal_feedback_survives_later_save"] = json!(has_label(
+            &self.window,
+            "Couldn’t remove this document from recents"
+        ));
+        checks["failed_removal_keeps_recent"] = json!(
+            self.reading_state
+                .recents()
+                .await
+                .unwrap()
+                .iter()
+                .any(|recent| recent.id == record.id)
+        );
+        connection
+            .execute_batch("DROP TRIGGER reject_removal")
+            .unwrap();
+        self.open(record.path);
+        if let Ok(password) = std::env::var("READERO_SMOKE_PASSWORD") {
+            self.unlock_fixture(&password).await;
+        }
+        self.wait_ready().await;
+        checks
+    }
+
     async fn check_recovery(self: &Rc<Self>, directory: &std::path::Path) -> Value {
         let mut checks = json!({});
         let Some(mut record) = self.record_for_save() else {
@@ -179,22 +262,31 @@ impl Shell {
         let id = record.id.clone();
         self.home();
         // Drain the save-before-home and recent-load requests.
-        self.worker.call(|_| Ok(())).await.expect("state worker");
+        self.reading_state
+            .barrier(Duration::ZERO)
+            .await
+            .expect("state worker");
         settle(200).await;
-        // Model a retained failed save, including a provisional session ID.
+        // Exercise retention through the same save operation as the shell.
+        let database = directory.join("state/reading.sqlite3");
+        let lock = rusqlite::Connection::open(&database).expect("test database");
+        lock.execute_batch("BEGIN EXCLUSIVE")
+            .expect("lock database");
         let mut retained = record.clone();
         retained.id = "provisional-removal-session".into();
-        self.unsaved
-            .borrow_mut()
-            .insert(retained.path.clone(), (0, retained));
-        self.storage_error("Retained snapshot could not be saved.");
+        assert!(self.reading_state.save(Some(retained)).await.is_err());
+        self.refresh_storage();
+        lock.execute_batch("ROLLBACK").expect("unlock database");
         self.render_home(&[record.clone()]);
         checks["failed_save_recent_removal_clicked"] =
             json!(click_button(&self.content(), "Remove from recents"));
-        self.worker.call(|_| Ok(())).await.expect("drain removal");
+        self.reading_state
+            .barrier(Duration::ZERO)
+            .await
+            .expect("drain removal");
         settle(200).await;
         checks["recent_removal_cancels_retained_snapshot"] =
-            json!(!self.unsaved.borrow().contains_key(&record.path));
+            json!(!self.reading_state.status().pending);
         checks["recent_removal_clears_final_save_error"] =
             json!(!self.object::<adw::Banner>("save_banner").is_revealed());
         record.path = directory.join("missing-recent.md");
@@ -202,26 +294,25 @@ impl Shell {
         checks["continue_card_can_remove_missing_document"] =
             json!(click_button(&self.content(), "Remove from recents"));
         settle(250).await;
-        let saved_id = id.clone();
-        let (hidden, bookmarks) = self
-            .worker
-            .call(move |store| {
-                Ok((
-                    !store.recents()?.iter().any(|record| record.id == saved_id),
-                    store.bookmarks(&saved_id)?.len(),
-                ))
-            })
+        let hidden = !self
+            .reading_state
+            .recents()
             .await
-            .expect("query removed recent");
+            .expect("query recents")
+            .iter()
+            .any(|record| record.id == id);
+        let bookmarks = self
+            .reading_state
+            .bookmarks(id.clone())
+            .await
+            .expect("query bookmarks")
+            .len();
         checks["continue_removal_hides_recent"] = json!(hidden);
         checks["continue_removal_keeps_bookmarks"] = json!(bookmarks == 1);
 
         // Delay removal, then open a document before the callback is delivered.
         self.render_home(&[record.clone()]);
-        let delay = self.worker.call(|_| {
-            std::thread::sleep(Duration::from_millis(200));
-            Ok(())
-        });
+        let delay = self.reading_state.barrier(Duration::from_millis(200));
         checks["delayed_recent_removal_clicked"] =
             json!(click_button(&self.content(), "Remove from recents"));
         let source = std::env::var_os("READERO_SMOKE_FILE")
@@ -243,7 +334,10 @@ impl Shell {
                 .is_some_and(|current| current.path == source.canonicalize().expect("source path"))
                 && self.content().visible_child_name().as_deref() == Some("reader")
         );
-        self.worker.call(|_| Ok(())).await.expect("drain writes");
+        self.reading_state
+            .barrier(Duration::ZERO)
+            .await
+            .expect("drain writes");
         settle(100).await;
         let database = directory.join("state/reading.sqlite3");
         let lock = rusqlite::Connection::open(&database).expect("test database");
@@ -252,29 +346,33 @@ impl Shell {
         self.change_settings(|settings| settings.font_size = 23.0);
         let unsaved = self.record_for_save().expect("reader before Home");
         self.home();
-        self.worker
-            .call(|_| Ok(()))
+        self.reading_state
+            .barrier(Duration::ZERO)
             .await
             .expect("drain failed save");
         settle(100).await;
         checks["save_failure_after_home_is_visible"] =
             json!(self.object::<adw::Banner>("save_banner").is_revealed());
         checks["save_failure_after_home_keeps_snapshot"] =
-            json!(self.unsaved.borrow().contains_key(&unsaved.path));
+            json!(self.reading_state.status().pending);
         lock.execute_batch("ROLLBACK").expect("unlock database");
         self.save();
-        self.worker.call(|_| Ok(())).await.expect("drain retry");
+        self.reading_state
+            .barrier(Duration::ZERO)
+            .await
+            .expect("drain retry");
         settle(100).await;
         let path = unsaved.path.clone();
         let recovered = self
-            .worker
-            .call(move |store| store.document(&path))
+            .reading_state
+            .document(path)
             .await
-            .expect("saved previous document");
+            .expect("saved previous document")
+            .record;
         checks["retry_from_home_recovers_previous_document"] = json!(
             recovered.locator == unsaved.locator
                 && recovered.settings == unsaved.settings
-                && self.unsaved.borrow().is_empty()
+                && !self.reading_state.status().pending
                 && !self.object::<adw::Banner>("save_banner").is_revealed()
         );
 
@@ -299,10 +397,11 @@ impl Shell {
             lock.execute_batch("ROLLBACK").expect("unlock database");
             self.save();
             let saved = self
-                .worker
-                .call(move |store| store.document(&source))
+                .reading_state
+                .document(source)
                 .await
-                .expect("recovered state");
+                .expect("recovered state")
+                .record;
             settle(200).await;
             checks["storage_retry_reconnects_identity"] = json!(
                 saved.id == id
@@ -320,22 +419,13 @@ impl Shell {
             checks["storage_retry_clears_error"] =
                 json!(!self.object::<adw::Banner>("save_banner").is_revealed());
             self.bookmark();
+            // Bookmark work enters the queue before this subsequent read.
             let count = self
-                .worker
-                .call(move |store| Ok(store.bookmarks(&id)?.len()))
+                .reading_state
+                .bookmarks(id)
                 .await
-                .expect("recovered bookmarks");
-            // Bookmark work is enqueued by its async UI task.
-            settle(100).await;
-            let id = saved.id;
-            let count = if count == 1 {
-                self.worker
-                    .call(move |store| Ok(store.bookmarks(&id)?.len()))
-                    .await
-                    .expect("new bookmark")
-            } else {
-                count
-            };
+                .expect("recovered bookmarks")
+                .len();
             checks["storage_recovery_keeps_old_and_new_bookmarks"] = json!(count == 2);
         }
         checks
@@ -350,7 +440,7 @@ impl Shell {
             PathBuf::from(std::env::var_os("READERO_SMOKE_DIR").expect("smoke output"))
                 .join("invalid-opens");
         std::fs::create_dir_all(&fixture_dir).expect("invalid open fixtures");
-        let generation = self.generation.get();
+        let generation = self.generation();
         let record = self.record_for_save().expect("current session");
         let original_back = self.back.borrow().clone();
         let original_forward = self.forward.borrow().clone();
@@ -366,7 +456,7 @@ impl Shell {
             self.open(path);
             self.wait_ready().await;
             checks[format!("failed_open_preserves_{name}")] = json!(
-                self.generation.get() == generation
+                self.generation() == generation
                     && self
                         .record_for_save()
                         .is_some_and(|current| current.id == record.id
@@ -394,13 +484,45 @@ impl Shell {
         self.open(broken);
         self.wait_ready().await;
         checks["renderer_failure_preserves_reader"] = json!(
-            !self.opening.get()
-                && self.generation.get() == generation
+            !self.is_opening()
+                && self.generation() == generation
                 && self.content().visible_child_name().as_deref() == Some("reader")
                 && self.record_for_save().is_some_and(
                     |current| current.id == record.id && current.locator == record.locator
                 )
         );
+        if let Ok(password) = std::env::var("READERO_SMOKE_PASSWORD") {
+            let reader = self.content().visible_child();
+            self.open(record.path.clone());
+            let mut prompt = None;
+            for _ in 0..100 {
+                settle(50).await;
+                if let Some(dialog) = self
+                    .window
+                    .visible_dialog()
+                    .and_downcast::<adw::AlertDialog>()
+                {
+                    prompt = Some(dialog);
+                    break;
+                }
+            }
+            checks["superseded_password_prompt_presented"] = json!(prompt.is_some());
+            self.cancel_open();
+            settle(400).await;
+            checks["superseded_password_prompt_closed"] =
+                json!(self.window.visible_dialog().is_none());
+            if let Some(dialog) = prompt {
+                if let Some(entry) = dialog.extra_child().and_downcast::<gtk::PasswordEntry>() {
+                    entry.set_text(&password);
+                }
+                // Deliver a response which was queued for the obsolete job.
+                dialog.emit_by_name::<()>("response", &[&"unlock"]);
+            }
+            settle(400).await;
+            checks["stale_password_response_cannot_replace_reader"] = json!(
+                !self.is_opening() && self.content().visible_child() == reader && self.is_ready()
+            );
+        }
         let kind = self.object::<gtk::DropDown>("sidebar_kind");
         let previous_kind = kind.selected();
         self.show_search();
@@ -411,7 +533,7 @@ impl Shell {
             let row = self.list().row_at_index(0);
             let status = self.label("search_status").text();
             self.web_message(reflow::Message {
-                generation: self.generation.get(),
+                generation: self.generation(),
                 event: reflow::Event::Search {
                     query: "reading".into(),
                     items: vec![reflow::SearchItem {
@@ -432,7 +554,7 @@ impl Shell {
         let forward = self.forward.take();
         self.sync_controls();
         self.web_message(reflow::Message {
-            generation: self.generation.get(),
+            generation: self.generation(),
             event: reflow::Event::Jump {
                 locator: Some(locator),
             },
@@ -530,6 +652,14 @@ impl Shell {
         checks
     }
     async fn check_editing(self: &Rc<Self>, directory: &std::path::Path) -> Value {
+        let mut checks = self.check_reload_failure().await;
+        checks.as_object_mut().expect("reload checks").extend(
+            self.check_opening_lifecycle(directory)
+                .await
+                .as_object()
+                .expect("opening checks")
+                .clone(),
+        );
         self.change_settings(|settings| settings.mode = Mode::Scroll);
         self.renderer_diagnostics().await;
         for _ in 0..3 {
@@ -549,16 +679,12 @@ impl Shell {
         let source = std::fs::read_to_string(&original.path).expect("read generated fixture");
         self.push_history(original.locator.clone().expect("position"));
         let history_size = self.back.borrow().len();
-        let mut checks = json!({});
         for outcome in ["failure", "cancel", "invalid"] {
-            let generation = self.generation.get();
+            let generation = self.generation();
             // Queue a reload first, then start the candidate before its async
             // result can be delivered. No further file event rescues the reload.
             self.reload(original.path.clone());
-            let delay = self.worker.call(|_| {
-                std::thread::sleep(Duration::from_millis(1200));
-                Ok(())
-            });
+            let delay = self.reading_state.barrier(Duration::from_millis(1200));
             self.open(directory.join(if outcome == "invalid" {
                 "invalid-candidate.txt"
             } else {
@@ -570,33 +696,28 @@ impl Shell {
             delay.await.expect("delayed candidate");
             for _ in 0..100 {
                 settle(100).await;
-                if self.generation.get() != generation {
+                if self.generation() != generation {
                     break;
                 }
             }
             self.wait_ready().await;
             checks[format!("inflight_reload_recovers_{outcome}")] = json!(
-                self.generation.get() != generation
-                    && self.gate.borrow().accepts(self.generation.get())
+                self.generation() != generation
+                    && self.is_ready()
                     && self
                         .record_for_save()
                         .is_some_and(|r| r.path == original.path)
             );
         }
         for cancel in [false, true] {
-            let generation = self.generation.get();
+            let generation = self.generation();
             // Hold the candidate open across the watcher's debounce interval.
-            let delay = self.worker.call(|_| {
-                std::thread::sleep(Duration::from_millis(1800));
-                Ok(())
-            });
+            let delay = self.reading_state.barrier(Duration::from_millis(1800));
             self.open(directory.join("missing-candidate.md"));
             std::fs::write(&original.path, &source).expect("edit while opening");
             settle(1100).await;
             checks[format!("reload_waits_for_candidate_{cancel}")] = json!(
-                self.opening.get()
-                    && self.generation.get() == generation
-                    && self.reload_timer.borrow().is_some()
+                self.is_opening() && self.generation() == generation && self.reload_pending()
             );
             if cancel {
                 self.cancel_open();
@@ -604,22 +725,22 @@ impl Shell {
             delay.await.expect("delayed candidate");
             for _ in 0..100 {
                 settle(100).await;
-                if self.generation.get() != generation {
+                if self.generation() != generation {
                     break;
                 }
             }
             self.wait_ready().await;
             self.renderer_diagnostics().await;
             checks[format!("deferred_reload_recovers_{cancel}")] = json!(
-                self.generation.get() != generation
-                    && self.gate.borrow().accepts(self.generation.get())
+                self.generation() != generation
+                    && self.is_ready()
                     && self
                         .record_for_save()
                         .is_some_and(|r| r.path == original.path)
             );
         }
         for atomic in [false, true] {
-            let generation = self.generation.get();
+            let generation = self.generation();
             let surface = self.content().visible_child();
             if atomic {
                 let staging = directory.join("blank-replacement.md");
@@ -630,33 +751,29 @@ impl Shell {
             }
             settle(1400).await;
             checks[format!("blank_reload_keeps_reader_{atomic}")] = json!(
-                self.gate.borrow().accepts(generation)
+                self.is_current(generation)
+                    && self.is_ready()
                     && self.content().visible_child() == surface
                     && self.record_for_save().and_then(|r| r.locator) == original.locator
             );
-            checks[format!("blank_reload_keeps_watcher_{atomic}")] = json!(
-                self.monitor
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|monitor| !monitor.is_cancelled())
-            );
+            checks[format!("blank_reload_keeps_watcher_{atomic}")] = json!(self.watching_source());
             std::fs::write(&original.path, &source).expect("correct blank fixture");
             for _ in 0..100 {
                 settle(100).await;
-                if self.generation.get() != generation {
+                if self.generation() != generation {
                     break;
                 }
             }
             self.wait_ready().await;
             self.renderer_diagnostics().await;
             checks[format!("corrected_reload_recovers_{atomic}")] = json!(
-                self.generation.get() != generation
-                    && self.gate.borrow().accepts(self.generation.get())
+                self.generation() != generation
+                    && self.is_ready()
                     && self.record_for_save().and_then(|r| r.locator) == original.locator
             );
         }
         for atomic in [false, true] {
-            let generation = self.generation.get();
+            let generation = self.generation();
             let content = format!(
                 "An inserted paragraph {}.\n\n{source}",
                 if atomic {
@@ -674,7 +791,7 @@ impl Shell {
             }
             for _ in 0..100 {
                 settle(100).await;
-                if self.generation.get() != generation {
+                if self.generation() != generation {
                     break;
                 }
             }
@@ -707,7 +824,7 @@ impl Shell {
                 _ => false,
             };
             let prefix = if atomic { "atomic_edit" } else { "source_edit" };
-            checks[format!("{prefix}_detected")] = json!(self.generation.get() != generation);
+            checks[format!("{prefix}_detected")] = json!(self.generation() != generation);
             checks[format!("{prefix}_keeps_passage")] =
                 json!(same_passage && diagnostic["anchorVisible"] == true);
             checks[format!("{prefix}_keeps_focus")] = json!(
@@ -761,6 +878,306 @@ impl Shell {
         checks
     }
 
+    async fn check_reload_failure(self: &Rc<Self>) -> Value {
+        self.renderer_diagnostics().await;
+        let original = self.record_for_save().expect("ready before reload failure");
+        let surface = self.content().visible_child();
+        reflow::fail_next_start();
+        self.reload(original.path.clone());
+        for _ in 0..100 {
+            settle(50).await;
+            if has_label(&self.window, "Injected renderer startup failure") {
+                break;
+            }
+        }
+        let retained = self.record_for_save();
+        let checks = json!({
+            "reload_startup_failure_reported": has_label(&self.window, "Injected renderer startup failure"),
+            "reload_startup_failure_keeps_reader": self.content().visible_child() == surface,
+            "reload_startup_failure_keeps_reading_state": retained.as_ref().is_some_and(|r|
+                r.id == original.id && r.locator == original.locator && r.settings == original.settings),
+        });
+        // Restore the fixture even in the red run so unrelated checks continue.
+        self.open(original.path);
+        self.wait_ready().await;
+        self.renderer_diagnostics().await;
+        checks
+    }
+
+    async fn check_opening_lifecycle(self: &Rc<Self>, directory: &std::path::Path) -> Value {
+        let original = self.record_for_save().expect("ready for opening checks");
+        let source = std::fs::read_to_string(&original.path).expect("source fixture");
+        let other = directory.join("other-opening.md");
+        std::fs::write(
+            &other,
+            "# Another document\n\nIndependent reading material.",
+        )
+        .expect("candidate fixture");
+        let mut checks = json!({});
+
+        let delay = self.reading_state.barrier(Duration::from_millis(800));
+        self.open(original.path.clone());
+        self.change_settings(|settings| settings.font_size = 25.0);
+        delay.await.expect("delayed same-document preparation");
+        self.wait_ready().await;
+        checks["same_document_open_captures_latest_settings"] = json!(
+            self.record_for_save()
+                .is_some_and(|r| r.settings.font_size == 25.0)
+        );
+        self.change_settings(|settings| *settings = original.settings.clone());
+        self.renderer_diagnostics().await;
+
+        for reload in [false, true] {
+            let mut late = self.record_for_save().unwrap().locator.unwrap();
+            if let Anchor::Reflow { fraction, .. } = &mut late.anchor {
+                *fraction = if reload { 0.3456 } else { 0.2345 };
+            }
+            reflow::delay_next_start(900);
+            if reload {
+                self.reload(original.path.clone());
+            } else {
+                self.open(original.path.clone());
+            }
+            checks[format!("same_document_candidate_mapped_{reload}")] =
+                json!(self.wait_candidate().await);
+            self.web_message(reflow::Message {
+                generation: self.generation(),
+                event: reflow::Event::Location {
+                    locator: late.clone(),
+                    section: 1,
+                    total: 1,
+                },
+            });
+            self.wait_ready().await;
+            let renderer = self.renderer_diagnostics().await;
+            checks[format!("same_document_renderer_keeps_late_location_{reload}")] =
+                json!(renderer["locator"] == json!(late));
+            checks[format!("same_document_keeps_late_location_{reload}")] =
+                json!(self.record_for_save().and_then(|r| r.locator) == Some(late.clone()));
+            self.save();
+            let saved = self
+                .reading_state
+                .document(original.path.clone())
+                .await
+                .unwrap();
+            checks[format!("same_document_persists_late_location_{reload}")] =
+                json!(saved.record.locator == Some(late));
+        }
+
+        // The native candidate is mapped but has not emitted Ready. A second
+        // source change must survive its successful same-document commitment.
+        let old_generation = self.generation();
+        reflow::delay_next_start(900);
+        self.reload(original.path.clone());
+        checks["reload_candidate_is_mapped"] = json!(self.wait_candidate().await);
+        let newer = format!("{source}\n\nAn edit made during replacement startup.\n");
+        std::fs::write(&original.path, &newer).expect("newer source");
+        let revision = Publication::open(&original.path, Format::Markdown)
+            .expect("new publication")
+            .revision;
+        checks["edit_during_reload_reaches_reader"] = json!(self.wait_revision(&revision).await);
+        let reader = self.content().visible_child();
+        settle(1100).await;
+        checks["reload_stops_after_latest_edit"] = json!(self.content().visible_child() == reader);
+
+        let current = self.record_for_save().expect("latest revision ready");
+        self.web_message(reflow::Message {
+            generation: old_generation,
+            event: reflow::Event::Ready {
+                title: "Obsolete reader".into(),
+                toc: Vec::new(),
+                locator: None,
+                total: 1,
+            },
+        });
+        checks["stale_ready_cannot_replace_reading_state"] =
+            json!(self.record_for_save().is_some_and(|r| r.id == current.id
+                && r.title == current.title
+                && r.locator == current.locator
+                && r.revision == current.revision));
+
+        reflow::delay_next_start(900);
+        self.open(other.clone());
+        checks["replacement_candidate_is_mapped"] = json!(self.wait_candidate().await);
+        let mut late_locator = current.locator.clone().expect("active reader location");
+        if let Anchor::Reflow { fraction, .. } = &mut late_locator.anchor {
+            *fraction = 0.4321;
+        }
+        self.web_message(reflow::Message {
+            generation: self.generation(),
+            event: reflow::Event::Location {
+                locator: late_locator.clone(),
+                section: 1,
+                total: 1,
+            },
+        });
+        checks["mapped_candidate_retains_active_location"] =
+            json!(self.record_for_save().and_then(|r| r.locator) == Some(late_locator.clone()));
+        let bookmarks = self
+            .reading_state
+            .bookmarks(original.id.clone())
+            .await
+            .expect("existing bookmarks");
+        self.bookmark();
+        let after = self
+            .reading_state
+            .bookmarks(original.id.clone())
+            .await
+            .expect("bookmarks after blocked action");
+        checks["mapped_candidate_cannot_bookmark_retained_document"] =
+            json!(after.len() == bookmarks.len());
+        for added in after
+            .iter()
+            .filter(|b| !bookmarks.iter().any(|old| old.id == b.id))
+        {
+            self.reading_state
+                .remove_bookmark(added.id.clone())
+                .await
+                .expect("remove red-run bookmark");
+        }
+        let newer = format!("{source}\n\nAn edit made while another document opens.\n");
+        std::fs::write(&original.path, newer).expect("edit retained reader");
+        self.wait_ready().await;
+        settle(1100).await;
+        checks["replacement_discards_previous_document_reload"] =
+            json!(self.record_for_save().is_some_and(|r| r.path == other));
+        let saved = self
+            .reading_state
+            .document(original.path.clone())
+            .await
+            .expect("previous reader persisted");
+        checks["replacement_saves_late_active_location"] =
+            json!(saved.record.locator == Some(late_locator));
+
+        self.open(original.path.clone());
+        self.wait_ready().await;
+        self.renderer_diagnostics().await;
+        let before = self.record_for_save().expect("return to source");
+        let reader = self.content().visible_child();
+        self.push_history(before.locator.clone().expect("history target"));
+        let delay = self.reading_state.barrier(Duration::from_millis(900));
+        self.open(other.clone());
+        self.history(false);
+        delay.await.expect("delayed candidate");
+        settle(800).await;
+        checks["active_navigation_supersedes_candidate"] = json!(
+            !self.is_opening()
+                && self.content().visible_child() == reader
+                && self
+                    .record_for_save()
+                    .is_some_and(|r| r.path == original.path)
+        );
+
+        let delay = self.reading_state.barrier(Duration::from_millis(700));
+        self.open(other);
+        self.home();
+        delay.await.expect("delayed Home completion");
+        settle(700).await;
+        checks["home_rejects_late_open_completion"] = json!(
+            !self.is_ready()
+                && self.record_for_save().is_none()
+                && self.content().visible_child_name().as_deref() == Some("home")
+        );
+        for forward in [false, true] {
+            self.home();
+            let delay = self.reading_state.barrier(Duration::from_millis(700));
+            self.open(original.path.clone());
+            self.history(forward);
+            checks[format!("empty_history_keeps_first_open_{forward}")] = json!(self.is_opening());
+            delay.await.expect("delayed first open");
+            if self.is_opening() {
+                self.wait_ready().await;
+            }
+            checks[format!("empty_history_first_open_finishes_{forward}")] = json!(self.is_ready());
+        }
+        self.open(original.path.clone());
+        self.wait_ready().await;
+        self.renderer_diagnostics().await;
+        self.reading_state
+            .barrier(Duration::ZERO)
+            .await
+            .expect("drain saves");
+
+        // Let a watcher event arrive while a slow close is waiting for a save
+        // which will fail. Choosing Keep open must retain that source change.
+        let database = rusqlite::Connection::open(directory.join("state/reading.sqlite3"))
+            .expect("test database");
+        database.execute_batch("CREATE TRIGGER reject_close BEFORE INSERT ON documents BEGIN SELECT RAISE(FAIL, 'fixture rejects close save'); END;").expect("reject close save");
+        let delay = self.reading_state.barrier(Duration::from_millis(900));
+        let before_close = self.record_for_save().and_then(|r| r.locator);
+        self.turn(true);
+        self.close();
+        let newer = format!("{source}\n\nAn edit made while closing.\n");
+        std::fs::write(&original.path, newer).expect("edit during close");
+        let revision = Publication::open(&original.path, Format::Markdown)
+            .expect("close-time publication")
+            .revision;
+        delay.await.expect("slow close");
+        let mut kept_open = false;
+        for _ in 0..100 {
+            settle(50).await;
+            if let Some(dialog) = self
+                .window
+                .visible_dialog()
+                .and_downcast::<adw::AlertDialog>()
+            {
+                let diagnostic = self.renderer_diagnostics().await;
+                let checkpoint = serde_json::from_value::<Locator>(diagnostic["locator"].clone())
+                    .expect("renderer checkpoint locator");
+                checks["close_checkpoint_includes_pending_navigation"] =
+                    json!(Some(&checkpoint) != before_close.as_ref());
+                checks["failed_close_keeps_latest_checkpoint"] = json!(
+                    self.record_for_save().and_then(|r| r.locator).as_ref() == Some(&checkpoint)
+                );
+                self.open(directory.join("other-opening.md"));
+                checks["failed_close_waits_for_choice_before_opening"] = json!(!self.is_opening());
+                database
+                    .execute_batch("DROP TRIGGER reject_close")
+                    .expect("allow saves again");
+                kept_open = click_button(&dialog, "Keep open");
+                break;
+            }
+        }
+        checks["failed_close_offers_keep_open"] = json!(kept_open);
+        checks["failed_close_retains_source_change"] = json!(self.wait_revision(&revision).await);
+        // Restore the fixture for the existing passage and focus tests.
+        std::fs::write(&original.path, &source).expect("restore source");
+        let revision = Publication::open(&original.path, Format::Markdown)
+            .expect("restored publication")
+            .revision;
+        checks["source_recovers_after_lifecycle_checks"] =
+            json!(self.wait_revision(&revision).await);
+        self.back.borrow_mut().clear();
+        self.forward.borrow_mut().clear();
+        self.sync_controls();
+        checks
+    }
+
+    async fn wait_candidate(&self) -> bool {
+        for _ in 0..100 {
+            if self.content().visible_child_name().as_deref() == Some("candidate") {
+                return true;
+            }
+            settle(20).await;
+        }
+        false
+    }
+
+    async fn wait_revision(&self, revision: &str) -> bool {
+        for _ in 0..120 {
+            settle(50).await;
+            if !self.is_opening()
+                && self
+                    .record_for_save()
+                    .is_some_and(|r| r.revision == revision)
+            {
+                self.renderer_diagnostics().await;
+                return true;
+            }
+        }
+        false
+    }
+
     async fn unlock_fixture(&self, password: &str) -> bool {
         for _ in 0..120 {
             if let Some(dialog) = self
@@ -779,7 +1196,7 @@ impl Shell {
     async fn wait_ready(&self) {
         for _ in 0..80 {
             settle(250).await;
-            if !self.opening.get() && self.gate.borrow().accepts(self.generation.get()) {
+            if !self.is_opening() && self.is_ready() {
                 break;
             }
         }
@@ -864,6 +1281,23 @@ fn click_button(widget: &impl IsA<gtk::Widget>, label: &str) -> bool {
     let mut child = widget.as_ref().first_child();
     while let Some(current) = child {
         if click_button(&current, label) {
+            return true;
+        }
+        child = current.next_sibling();
+    }
+    false
+}
+
+fn has_label(widget: &impl IsA<gtk::Widget>, text: &str) -> bool {
+    if let Some(label) = widget.as_ref().downcast_ref::<gtk::Label>()
+        && label.is_mapped()
+        && label.text().contains(text)
+    {
+        return true;
+    }
+    let mut child = widget.as_ref().first_child();
+    while let Some(current) = child {
+        if has_label(&current, text) {
             return true;
         }
         child = current.next_sibling();

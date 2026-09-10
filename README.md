@@ -135,6 +135,7 @@ xvfb-run -a dbus-run-session -- python3 scripts/accessibility-smoke.py \
 Rust/GTK4/libadwaita own the shell; Papers owns PDF rendering; WebKitGTK with pinned foliate-js handles EPUB and rendered Markdown. A dedicated worker owns SQLite. Document identity and versioned locators are independent of the presentation mode, leaving a path to linked notes later.
 
 - [Finalized MVP PRD](docs/MVP_PRD.md)
+- [Future features and proposed roadmap](docs/ROADMAP.md)
 - [Stack decisions and sources](docs/STACK_DECISIONS.md)
 - [Implementation and QA](docs/IMPLEMENTATION.md)
 - [Original component research](docs/research/VALIDATION.md)

@@ -172,6 +172,8 @@ Save position after a short debounce with a maximum unsaved interval, and flush 
 
 Future notes use a document-level notebook with optional location links. The notebook stays stable while reading moves; page tracking updates a location indicator. Design the locator/selection interfaces now, but defer note storage/UI and highlighting tools until the reader is dependable. No annotation interoperability is promised by merely having a CFI or a PDF page coordinate.
 
+The [future-feature roadmap](ROADMAP.md) records the notebook, annotations, export, and optional reading improvements, including decisions that remain open.
+
 ## Reconsideration triggers
 
 - Reopen the PDF choice if the native component prevents reliable location restoration or requires maintaining a substantial Papers fork.

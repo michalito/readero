@@ -176,6 +176,8 @@ Application scripts and document content need isolated contexts and a narrow mes
 
 ## 8. Future notebook and annotations
 
+The [future-feature roadmap](ROADMAP.md) consolidates these ideas, the smaller optional reading improvements, open decisions, and a proposed delivery order. This PRD remains the MVP acceptance baseline.
+
 Preserve the architectural ability to add these after MVP:
 
 - A continuous notebook belonging to each document, suitable for examples, questions, and longer thoughts.
