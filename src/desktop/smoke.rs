@@ -927,6 +927,43 @@ impl Shell {
         self.change_settings(|settings| *settings = original.settings.clone());
         self.renderer_diagnostics().await;
 
+        for reload in [false, true] {
+            let mut late = self.record_for_save().unwrap().locator.unwrap();
+            if let Anchor::Reflow { fraction, .. } = &mut late.anchor {
+                *fraction = if reload { 0.3456 } else { 0.2345 };
+            }
+            reflow::delay_next_start(900);
+            if reload {
+                self.reload(original.path.clone());
+            } else {
+                self.open(original.path.clone());
+            }
+            checks[format!("same_document_candidate_mapped_{reload}")] =
+                json!(self.wait_candidate().await);
+            self.web_message(reflow::Message {
+                generation: self.generation(),
+                event: reflow::Event::Location {
+                    locator: late.clone(),
+                    section: 1,
+                    total: 1,
+                },
+            });
+            self.wait_ready().await;
+            let renderer = self.renderer_diagnostics().await;
+            checks[format!("same_document_renderer_keeps_late_location_{reload}")] =
+                json!(renderer["locator"] == json!(late));
+            checks[format!("same_document_keeps_late_location_{reload}")] =
+                json!(self.record_for_save().and_then(|r| r.locator) == Some(late.clone()));
+            self.save();
+            let saved = self
+                .reading_state
+                .document(original.path.clone())
+                .await
+                .unwrap();
+            checks[format!("same_document_persists_late_location_{reload}")] =
+                json!(saved.record.locator == Some(late));
+        }
+
         // The native candidate is mapped but has not emitted Ready. A second
         // source change must survive its successful same-document commitment.
         let old_generation = self.generation();

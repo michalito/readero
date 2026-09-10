@@ -476,9 +476,21 @@ impl Shell {
                         .borrow_mut()
                         .as_mut()
                         .and_then(|c| c.reader.take());
-                    let Some((record, reader)) = pending else {
+                    let Some((mut record, reader)) = pending else {
                         return;
                     };
+                    let staged_locator = record.locator.clone();
+                    s.capture_latest(&mut record);
+                    let restore = (record.locator != staged_locator)
+                        .then(|| record.locator.clone())
+                        .flatten();
+                    if let Some(latest) = &restore
+                        && let reflow::Event::Ready { locator, .. } = &mut message.event
+                    {
+                        // Ready describes the earlier staging snapshot. Keep
+                        // the final active location until the renderer catches up.
+                        *locator = Some(latest.clone());
+                    }
                     let result = s.commit_open(record);
                     let generation = result.generation;
                     committed.set(Some(generation));
@@ -490,6 +502,9 @@ impl Shell {
                     message.generation = generation;
                     s.web_message(message);
                     s.opening_controls(true);
+                    if let Some(locator) = restore {
+                        s.goto(Destination::Locator(locator), false);
+                    }
                     if let Some(visible) = result.sidebar {
                         s.sidebar().set_reveal_child(visible && !s.focus.get());
                     }
