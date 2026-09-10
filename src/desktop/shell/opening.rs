@@ -536,7 +536,21 @@ impl Shell {
     }
 
     pub(super) fn web_message(self: &Rc<Self>, message: reflow::Message) {
-        if !self.is_current(message.generation) || self.candidate_mapped() {
+        if !self.is_current(message.generation) {
+            return;
+        }
+        if self.candidate_mapped() {
+            // A location posted before the active reader was hidden can arrive
+            // while its replacement lays out. Keep it for commit_open's save,
+            // without letting the hidden reader change the candidate's UI.
+            if let reflow::Event::Location { locator, .. } = message.event
+                && self.is_ready()
+                && locator.validate().is_ok()
+                && let Some(record) = self.current.borrow_mut().as_mut()
+            {
+                record.locator = Some(locator);
+                self.schedule_save();
+            }
             return;
         }
         match message.event {

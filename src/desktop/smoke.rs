@@ -962,6 +962,20 @@ impl Shell {
         reflow::delay_next_start(900);
         self.open(other.clone());
         checks["replacement_candidate_is_mapped"] = json!(self.wait_candidate().await);
+        let mut late_locator = current.locator.clone().expect("active reader location");
+        if let Anchor::Reflow { fraction, .. } = &mut late_locator.anchor {
+            *fraction = 0.4321;
+        }
+        self.web_message(reflow::Message {
+            generation: self.generation(),
+            event: reflow::Event::Location {
+                locator: late_locator.clone(),
+                section: 1,
+                total: 1,
+            },
+        });
+        checks["mapped_candidate_retains_active_location"] =
+            json!(self.record_for_save().and_then(|r| r.locator) == Some(late_locator.clone()));
         let bookmarks = self
             .reading_state
             .bookmarks(original.id.clone())
@@ -990,6 +1004,13 @@ impl Shell {
         settle(1100).await;
         checks["replacement_discards_previous_document_reload"] =
             json!(self.record_for_save().is_some_and(|r| r.path == other));
+        let saved = self
+            .reading_state
+            .document(original.path.clone())
+            .await
+            .expect("previous reader persisted");
+        checks["replacement_saves_late_active_location"] =
+            json!(saved.record.locator == Some(late_locator));
 
         self.open(original.path.clone());
         self.wait_ready().await;
