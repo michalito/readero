@@ -175,7 +175,7 @@
       }
     },
     "passages-pdf": {
-      "assertions": 54,
+      "assertions": 62,
       "passed": true,
       "checks": {
         "ready": true,
@@ -210,6 +210,14 @@
         "pdf_highlight_at_180_degrees": true,
         "pdf_highlight_at_270_degrees": true,
         "pdf_highlight_at_90_degrees": true,
+        "pdf_keyboard_action_moves_reader": true,
+        "pdf_keyboard_fixture_has_selection": true,
+        "pdf_keyboard_navigation_cancels_pending_passage": true,
+        "pdf_keyboard_navigation_clears_highlight": true,
+        "pdf_keyboard_navigation_invalidates_selection": true,
+        "pdf_keyboard_navigation_prevents_stale_capture": true,
+        "pdf_keyboard_return_does_not_restore_old_highlight": true,
+        "pdf_programmatic_passage_restore_keeps_highlight": true,
         "pdf_rotate_upright_action_enables_selection": true,
         "pdf_selection_capability_at_0_degrees": true,
         "pdf_selection_capability_at_180_degrees": true,
@@ -332,5 +340,11 @@
     "The Docker host prohibits unprivileged user namespaces. Native tests set WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1 inside this disposable isolated container; these runs do not qualify the WebKit sandbox. No application sandbox setting changed.",
     "AT-SPI assertions are tree/action checks, not a human Orca usability session.",
     "No system installation, actual user-session actions, Wayland scale/performance requalification, or full MVP release qualification was performed. The documented ordinary-reading, human accessibility, and performance gates remain open."
-  ]
+  ],
+  "pdf_keyboard_followup": {
+    "finding": "SOL-F1: Papers keyboard scroll actions bypassed wheel and selection-changed invalidation.",
+    "regression": "Five intended assertions failed before connecting the native scroll action; all 62 PDF passage assertions pass after the fix. The fixture movement check accepts movement within a tall page as well as page-number changes.",
+    "assertions_added": 8,
+    "behavior": "Keyboard navigation clears the source selection token, Save availability, temporary quotation highlight, and pending passage navigation while programmatic passage restoration keeps its highlight."
+  }
 }

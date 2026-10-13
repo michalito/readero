@@ -76,6 +76,18 @@ impl Shell {
                 s.source_selection(s.notebook.selection_serial.get() + 1, view.has_selection());
             }
         });
+        // Papers' PageDown/PageUp actions can retain the old native selection
+        // and do not emit wheel events. Invalidate before the default scroll
+        // handler, while leaving programmatic passage restoration untouched.
+        let weak = Rc::downgrade(self);
+        pdf.view.connect_scroll(move |_, _, _| {
+            if let Some(s) = weak.upgrade()
+                && s.is_current(generation)
+            {
+                s.cancel_passage_navigation();
+            }
+            false
+        });
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::BOTH_AXES);
         scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak = Rc::downgrade(self);

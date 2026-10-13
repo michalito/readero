@@ -69,6 +69,16 @@ pub(super) struct Pane {
 }
 
 impl Pane {
+    #[cfg(feature = "smoke")]
+    pub(super) fn capture_probe(&self) -> (u64, bool, bool, bool) {
+        (
+            self.selection_serial.get(),
+            self.selection_available.get(),
+            self.capture.is_sensitive(),
+            self.capture_pending.get(),
+        )
+    }
+
     pub(super) fn new(split: gtk::Paned) -> Self {
         split.set_wide_handle(true);
         let panel = gtk::Box::new(gtk::Orientation::Vertical, 8);

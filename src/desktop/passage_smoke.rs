@@ -323,6 +323,57 @@ impl Shell {
             self.change_settings(|settings| settings.mode = mode);
             settle(500).await;
         }
+        let pdf = match self.surface.borrow().as_ref() {
+            Some(Surface::Pdf(pdf)) => Some(Rc::clone(pdf)),
+            _ => None,
+        };
+        if let Some(pdf) = pdf {
+            let mode = self.current.borrow().as_ref().unwrap().settings.mode;
+            self.change_settings(|settings| settings.mode = Mode::Pages);
+            self.follow_saved_passage(&reference.id);
+            settle(800).await;
+            pdf.view.select_all();
+            settle(100).await;
+            let position = (pdf.model.page(), pdf.scroll.vadjustment().value());
+            let (serial, available, sensitive, _) = self.notebook.capture_probe();
+            checks["pdf_keyboard_fixture_has_selection"] =
+                json!(pdf.view.has_selection() && available && sensitive);
+            // This is the Papers action used by PageDown/PageUp. It does not
+            // emit a wheel event or necessarily change the native selection.
+            pdf.view
+                .emit_scroll(gtk::ScrollType::PageForward, gtk::Orientation::Vertical);
+            settle(400).await;
+            checks["pdf_keyboard_action_moves_reader"] =
+                json!((pdf.model.page(), pdf.scroll.vadjustment().value()) != position);
+            let (new_serial, available, sensitive, _) = self.notebook.capture_probe();
+            checks["pdf_keyboard_navigation_invalidates_selection"] =
+                json!(new_serial > serial && !available && !sensitive);
+            self.save_selected_passage();
+            checks["pdf_keyboard_navigation_prevents_stale_capture"] =
+                json!(!self.notebook.capture_probe().3);
+            settle(200).await;
+            self.follow_saved_passage(&reference.id);
+            settle(800).await;
+            checks["pdf_programmatic_passage_restore_keeps_highlight"] =
+                json!(pdf.passage_highlighted());
+            pdf.view
+                .emit_scroll(gtk::ScrollType::PageForward, gtk::Orientation::Vertical);
+            settle(250).await;
+            checks["pdf_keyboard_navigation_clears_highlight"] = json!(!pdf.passage_highlighted());
+            pdf.view
+                .emit_scroll(gtk::ScrollType::PageBackward, gtk::Orientation::Vertical);
+            settle(250).await;
+            checks["pdf_keyboard_return_does_not_restore_old_highlight"] =
+                json!(!pdf.passage_highlighted());
+            self.follow_saved_passage(&reference.id);
+            pdf.view
+                .emit_scroll(gtk::ScrollType::PageForward, gtk::Orientation::Vertical);
+            settle(800).await;
+            checks["pdf_keyboard_navigation_cancels_pending_passage"] =
+                json!(!pdf.passage_highlighted());
+            self.change_settings(|settings| settings.mode = mode);
+            settle(500).await;
+        }
         self.attach_passage();
         let second = self
             .notebook

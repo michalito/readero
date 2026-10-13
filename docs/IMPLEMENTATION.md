@@ -12,8 +12,14 @@ reveals the existing saved passage without changing the notebook editing state
 at capture time. Reflow whitespace-only selections keep Save disabled without
 materializing the full quotation on each selection event.
 
+The independent review also found that native PDF keyboard scrolling retained
+the previous selection and quotation indication. Papers scroll actions now
+invalidate capture and pending navigation before their normal handler runs.
+Eight focused native checks cover keyboard movement, stale capture rejection,
+highlight clearing, and preserved programmatic passage restoration.
+
 The [fresh review evidence](qa/review-validation.json) records 52 core and 52
-desktop Rust tests, 10 installer tests, strict Clippy, 241 native assertions across
+desktop Rust tests, 10 installer tests, strict Clippy, 249 native assertions across
 Markdown/EPUB/PDF passage flows and the notebook flow, and 25 AT-SPI assertions.
 All pass in an isolated Ubuntu 26.04 container with synthetic data, private Xvfb,
 and private D-Bus sessions. The host disallows WebKit's user-namespace sandbox,
