@@ -206,6 +206,51 @@
     ...saved.passage,
     prefix: "different prefix",
   });
+  const manyMatches = documentFor(`<p>${"a ".repeat(50000)}X a Y</p>`);
+  const slowPassage = {
+    ...saved.passage,
+    cfi: "",
+    quote: "a",
+    prefix: "X ",
+    suffix: " Y",
+  };
+  const cancelled = (promise) =>
+    promise.then(
+      () => false,
+      (error) => error.message === "Passage navigation was cancelled.",
+    );
+  const recovery = new Passages(book, "cancellation", () => {});
+  const afterNavigation = cancelled(
+    recovery.resolve(slowPassage, [{ index: 0, doc: manyMatches }]),
+  );
+  recovery.clear();
+  checks.navigation_aborts_yielded_recovery_scan = await afterNavigation;
+  const superseded = cancelled(
+    recovery.resolve(slowPassage, [{ index: 0, doc: manyMatches }]),
+  );
+  const newest = await recovery.resolve(saved.passage, [{ index: 0, doc }]);
+  checks.newer_request_aborts_yielded_recovery_scan = await superseded;
+  checks.newer_request_still_resolves_its_passage =
+    newest.passage.quote === saved.passage.quote;
+  let finishLoading;
+  const loading = new Passages(
+    {
+      ...book,
+      sections: [
+        {
+          ...book.sections[0],
+          createDocument: () =>
+            new Promise((resolve) => (finishLoading = resolve)),
+        },
+      ],
+    },
+    "cancellation",
+    () => {},
+  );
+  const afterLoad = cancelled(loading.resolve(saved.passage, []));
+  loading.clear();
+  finishLoading(doc);
+  checks.navigation_aborts_recovery_after_document_load = await afterLoad;
   const blank = documentFor("<p>  \n\t </p>");
   const empty = blank.createRange();
   empty.selectNodeContents(blank.body);

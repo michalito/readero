@@ -23,11 +23,15 @@ deselects or selects whitespace in another reflow chapter, while preserving a
 newer selection when a background chapter reports delayed deselection. Saved PDF
 quotations are validated against their ordered page fragments, permitting only
 whitespace between them. The original notebook design now labels its location-only
-description as historical and identifies F02a as delivered.
+description as historical and identifies F02a as delivered. Recovery scans now abort
+when navigation or a newer request supersedes them, including during document
+loading. Paged PDF navigation preserves the announced page immediately for saves,
+bookmarks and appearance changes while deferring coordinate sampling.
 
 The [fresh review evidence](qa/review-validation.json) records 53 core and 53
-desktop Rust tests, 10 installer tests, strict Clippy, 261 native assertions across
-Markdown/EPUB/PDF passage flows and the notebook flow, and 25 AT-SPI assertions.
+desktop Rust tests, 10 installer tests, strict Clippy, 358 native assertions across
+Markdown/EPUB/PDF passage flows, the notebook flow and mixed-size PDF navigation,
+and 25 AT-SPI assertions.
 All pass in an isolated Ubuntu 26.04 container with synthetic data, private Xvfb,
 and private D-Bus sessions. The host disallows WebKit's user-namespace sandbox,
 so it was disabled only for these container runs; this is not sandbox

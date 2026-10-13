@@ -328,8 +328,48 @@ impl Shell {
             _ => None,
         };
         if let Some(pdf) = pdf {
-            let mode = self.current.borrow().as_ref().unwrap().settings.mode;
-            self.change_settings(|settings| settings.mode = Mode::Pages);
+            let settings = self.current.borrow().as_ref().unwrap().settings.clone();
+            self.change_settings(|settings| {
+                settings.mode = Mode::Pages;
+                settings.pdf_sizing = "page".into();
+            });
+            self.follow_saved_passage(&reference.id);
+            settle(800).await;
+            let initial_page = pdf.model.page();
+            pdf.next();
+            let turned_page = pdf.model.page();
+            checks["pdf_immediate_save_keeps_announced_page"] = json!(
+                turned_page != initial_page
+                    && matches!(self.record_for_save().and_then(|r| r.locator),
+                        Some(Locator { anchor: Anchor::Pdf { page, .. }, .. }) if page == turned_page)
+            );
+            self.bookmark();
+            pdf.next();
+            let latest_page = pdf.model.page();
+            self.change_settings(|settings| settings.pdf_sizing = "width".into());
+            checks["pdf_immediate_settings_keeps_latest_page"] = json!(
+                latest_page != turned_page
+                    && matches!(pdf.stable_location(),
+                        Some(Locator { anchor: Anchor::Pdf { page, .. }, .. }) if page == latest_page)
+            );
+            settle(500).await;
+            checks["pdf_deferred_samples_do_not_restore_previous_page"] = json!(
+                pdf.model.page() == latest_page
+                    && matches!(pdf.stable_location(),
+                        Some(Locator { anchor: Anchor::Pdf { page, .. }, .. }) if page == latest_page)
+            );
+            let document_id = self.current.borrow().as_ref().unwrap().id.clone();
+            let bookmarks = self.reading_state.bookmarks(document_id).await.unwrap();
+            checks["pdf_immediate_bookmark_persists_announced_page"] = json!(
+                bookmarks.iter().any(|bookmark|
+                    matches!(bookmark.locator.anchor, Anchor::Pdf { page, .. } if page == turned_page))
+            );
+            for bookmark in bookmarks {
+                self.reading_state
+                    .remove_bookmark(bookmark.id)
+                    .await
+                    .unwrap();
+            }
             self.follow_saved_passage(&reference.id);
             settle(800).await;
             pdf.view.select_all();
@@ -371,7 +411,7 @@ impl Shell {
             settle(800).await;
             checks["pdf_keyboard_navigation_cancels_pending_passage"] =
                 json!(!pdf.passage_highlighted());
-            self.change_settings(|settings| settings.mode = mode);
+            self.change_settings(|current| *current = settings);
             settle(500).await;
         }
         self.attach_passage();

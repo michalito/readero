@@ -136,6 +136,7 @@ export class Passages {
     this.revision = revision;
     this.send = send;
     this.serial = 0;
+    this.resolveSerial = 0;
     this.selection = null;
     this.disposed = false;
     this.marked = new Set();
@@ -199,13 +200,23 @@ export class Passages {
     return capture(this.book, doc, index, range, this.revision);
   }
   async resolve(passage, live) {
+    const request = ++this.resolveSerial;
+    const selection = this.serial;
+    const checkCurrent = () => {
+      if (
+        this.disposed ||
+        request !== this.resolveSerial ||
+        selection !== this.serial
+      )
+        throw new Error("Passage navigation was cancelled.");
+    };
     if (passage.kind !== "reflow" || !passage.quote?.trim()) fail();
     const index = this.book.sections.findIndex((s) => s.id === passage.href);
     if (index < 0) fail();
     const doc =
       live.find((c) => c.index === index)?.doc ??
       (await this.book.sections[index].createDocument());
-    if (this.disposed) fail();
+    checkCurrent();
     const text = stream(doc).text;
     const matches = (range) => {
       if (!range || range.collapsed || range.toString() !== passage.quote)
@@ -245,7 +256,7 @@ export class Passages {
         offset = start + 1;
         if (++visited % 100 === 0) {
           await new Promise((resolve) => setTimeout(resolve, 0));
-          if (this.disposed) fail();
+          checkCurrent();
         }
       }
       if (found < 0) fail();

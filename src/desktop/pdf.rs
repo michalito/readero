@@ -89,13 +89,29 @@ impl Pdf {
             });
         }
         let weak = Rc::downgrade(&pdf);
-        pdf.model.connect_page_changed(move |_, _, _| {
+        pdf.model.connect_page_changed(move |_, _, page| {
             // Papers can announce the new page before its view is allocated.
             // In paged mode the scroll adjustment may stay at zero, so there
             // need not be a later scroll event to correct the old page's anchor.
             if let Some(pdf) = weak.upgrade()
                 && !pdf.is_restoring()
             {
+                if !pdf.model.is_continuous() {
+                    // Save/bookmark/settings can run before the next frame.
+                    // Retain the announced page now; refine its coordinates
+                    // after allocation instead of reusing the preceding page.
+                    let locator = Locator {
+                        version: 1,
+                        anchor: Anchor::Pdf {
+                            page,
+                            x: 0.0,
+                            y: 0.0,
+                            viewport_y: 0.0,
+                        },
+                    };
+                    pdf.last_stable.replace(Some(locator.clone()));
+                    (pdf.changed)(locator, pdf.position_label());
+                }
                 let serial = pdf.restore_serial.get();
                 let weak = Rc::downgrade(&pdf);
                 let after_layout = Cell::new(false);
@@ -241,6 +257,10 @@ impl Pdf {
     fn emit_position(&self) {
         if !self.restoring.get()
             && let Some(locator) = self.location()
+            // During a paged transition, adjustment signals may still sample
+            // the old allocation. They must not overwrite the announced page.
+            && (self.model.is_continuous()
+                || matches!(&locator.anchor, Anchor::Pdf { page, .. } if *page == self.model.page()))
         {
             self.last_stable.replace(Some(locator.clone()));
             (self.changed)(locator, self.position_label());

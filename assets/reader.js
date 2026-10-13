@@ -338,6 +338,7 @@ export async function start(config, nativeSend) {
         passages.clear();
         return queue(() => renderer.prev());
       case "settings":
+        passages.clear();
         settings = message.settings;
         if (settingsPending) return;
         settingsPending = true;
@@ -346,6 +347,7 @@ export async function start(config, nativeSend) {
           await layout();
         });
       case "goto":
+        passages.clear();
         return queue(() =>
           navigate(resolveLocator(book, message.locator), message.locator),
         );
@@ -366,7 +368,10 @@ export async function start(config, nativeSend) {
         });
       case "href": {
         const target = book.resolveHref(message.href);
-        if (target?.index >= 0) return queue(() => navigate(target));
+        if (target?.index >= 0) {
+          passages.clear();
+          return queue(() => navigate(target));
+        }
         break;
       }
       case "search":
