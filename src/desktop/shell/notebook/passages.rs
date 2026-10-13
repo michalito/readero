@@ -2,6 +2,44 @@ use super::*;
 use readero::passage::Capture;
 use webkit6::prelude::*;
 
+/// Failed observations belong to an exact target in the current source session.
+/// Keep at most the shared history's 100 actions worth of observations; successful
+/// verification retires an older failure independently of notebook Undo/Redo.
+#[derive(Default)]
+pub(super) struct Failures(std::collections::VecDeque<(String, Capture)>);
+
+impl Failures {
+    fn matches(id: &str, capture: &Capture, reference: &Reference) -> bool {
+        id == reference.id
+            && capture.locator == reference.locator
+            && Some(&capture.passage) == reference.passage.as_ref()
+    }
+    pub(super) fn contains(&self, reference: &Reference) -> bool {
+        self.0.iter().any(|(id, c)| Self::matches(id, c, reference))
+    }
+    fn remove(&mut self, reference: &Reference) {
+        self.0.retain(|(id, c)| !Self::matches(id, c, reference));
+    }
+    fn insert(&mut self, reference: &Reference) {
+        self.remove(reference);
+        if let Some(passage) = reference.passage.clone() {
+            self.0.push_back((
+                reference.id.clone(),
+                Capture {
+                    locator: reference.locator.clone(),
+                    passage,
+                },
+            ));
+            while self.0.len() > 100 {
+                self.0.pop_front();
+            }
+        }
+    }
+    pub(super) fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
 #[derive(serde::Deserialize)]
 struct Resolved {
     #[serde(flatten)]
@@ -64,9 +102,11 @@ impl Shell {
         self.is_current(generation)
             && self.notebook.passage_request.get() == request
             && self.notebook.draft.borrow().as_ref().is_some_and(|d| {
-                d.references
-                    .iter()
-                    .any(|r| r.id == reference.id && r.passage == reference.passage)
+                d.references.iter().any(|r| {
+                    r.id == reference.id
+                        && r.passage == reference.passage
+                        && r.locator == reference.locator
+                })
             })
     }
 
@@ -631,7 +671,13 @@ impl Shell {
         self.notebook.passage_request.set(request);
         let pending = match self.surface.borrow().as_ref() {
             Some(Surface::Pdf(pdf)) => {
-                let result = pdf.resolve_passage(&passage);
+                let revision = self
+                    .current
+                    .borrow()
+                    .as_ref()
+                    .map(|r| r.revision.clone())
+                    .unwrap_or_default();
+                let result = pdf.resolve_passage(&passage, &revision);
                 let pdf = Rc::clone(pdf);
                 let weak = Rc::downgrade(self);
                 glib::idle_add_local_once(move || {
@@ -644,11 +690,14 @@ impl Shell {
                     match result {
                         Ok(resolved) => {
                             let recovered = resolved.recovered;
+                            if !s.accept_resolved_passage(&reference, &resolved.capture, recovered)
+                            {
+                                return;
+                            }
                             if let Some(current) = s.record_for_save().and_then(|r| r.locator) {
                                 s.push_history(current);
                             }
                             pdf.show_passage(resolved);
-                            s.notebook.unresolved.borrow_mut().remove(&reference.id);
                             s.sync_controls();
                             if recovered {
                                 s.toast("Passage recovered from its quotation");
@@ -672,11 +721,11 @@ impl Shell {
             if !s.passage_request_current(generation, request, &reference) { return; }
             match result {
                 Ok(ResolveReply::Resolved(resolved)) if resolved.capture.passage.validate(&resolved.capture.locator).is_ok() => {
+                    if !s.accept_resolved_passage(&reference, &resolved.capture, resolved.recovered) { return; }
                     if let Some(current) = s.record_for_save().and_then(|r| r.locator) { s.push_history(current); }
                     if let Some(Surface::Reflow(reader)) = s.surface.borrow().as_ref() {
                         reader.command(serde_json::json!({"type":"passage", "locator":resolved.capture.locator, "passage":resolved.capture.passage}));
                     }
-                    s.notebook.unresolved.borrow_mut().remove(&reference.id);
                     s.sync_controls();
                     if resolved.recovered { s.toast("Passage recovered from its quotation and context"); }
                 }
@@ -687,11 +736,61 @@ impl Shell {
         });
     }
 
+    fn accept_resolved_passage(
+        self: &Rc<Self>,
+        previous: &Reference,
+        capture: &Capture,
+        recovered: bool,
+    ) -> bool {
+        // Verification must never rewrite the quotation as a side effect. Relink
+        // remains the only explicit operation allowed to replace saved words.
+        if previous
+            .passage
+            .as_ref()
+            .is_none_or(|p| p.quote != capture.passage.quote)
+            || capture.passage.validate(&capture.locator).is_err()
+        {
+            self.action_error(
+                "Could not open this passage. Please try again.",
+                &Error::Invalid("The reader returned a different quotation.".into()),
+            );
+            return false;
+        }
+        if recovered
+            && !self.notebook_metadata(|draft| {
+                let current = draft
+                    .references
+                    .iter_mut()
+                    .find(|r| r.id == previous.id)
+                    .ok_or_else(|| Error::Invalid("This passage was removed.".into()))?;
+                if current.passage != previous.passage || current.locator != previous.locator {
+                    return Err(Error::Invalid(
+                        "This passage changed. Select it again.".into(),
+                    ));
+                }
+                current.locator = capture.locator.clone();
+                current.passage = Some(capture.passage.clone());
+                Ok(())
+            })
+        {
+            return false;
+        }
+        self.notebook.unresolved.borrow_mut().remove(previous);
+        if let Some(updated) = self
+            .notebook
+            .draft
+            .borrow()
+            .as_ref()
+            .and_then(|d| d.references.iter().find(|r| r.id == previous.id))
+        {
+            self.notebook.unresolved.borrow_mut().remove(updated);
+        }
+        self.render_references();
+        true
+    }
+
     fn passage_needs_relink(self: &Rc<Self>, reference: Reference) {
-        self.notebook
-            .unresolved
-            .borrow_mut()
-            .insert(reference.id.clone());
+        self.notebook.unresolved.borrow_mut().insert(&reference);
         let quote = reference
             .passage
             .as_ref()
@@ -800,7 +899,15 @@ impl Shell {
                 }) {
                     return;
                 }
-                s.notebook.unresolved.borrow_mut().remove(&id);
+                if let Some(updated) = s
+                    .notebook
+                    .draft
+                    .borrow()
+                    .as_ref()
+                    .and_then(|d| d.references.iter().find(|r| r.id == id))
+                {
+                    s.notebook.unresolved.borrow_mut().remove(updated);
+                }
                 s.render_references();
             }
         });
@@ -872,7 +979,7 @@ impl Shell {
         location.set_wrap(true);
         location.set_max_width_chars(36);
         column.append(&location);
-        if self.notebook.unresolved.borrow().contains(&reference.id) {
+        if self.notebook.unresolved.borrow().contains(reference) {
             column.append(&text("Needs relinking", "warning"));
         }
         if let Some(passage) = &reference.passage {
@@ -895,5 +1002,58 @@ impl Shell {
             column.append(&text("Saved location · no quotation", "caption"));
         }
         gtk::Popover::builder().child(&column).build()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn reference() -> Reference {
+        serde_json::from_value(serde_json::json!({
+            "id": "passage", "label": "Original name",
+            "locator": {"version": 1, "kind": "reflow", "href": "chapter", "cfi": "epubcfi(/2)", "section": 0, "fraction": 0.0},
+            "passage": {"kind": "reflow", "quote": "words", "revision": "v1", "href": "chapter", "cfi": "epubcfi(/2)", "start": 0, "end": 5, "prefix": "", "suffix": ""}
+        })).unwrap()
+    }
+    #[test]
+    fn failure_observations_follow_exact_targets_without_overwriting_new_verification() {
+        let mut failures = Failures::default();
+        let old = reference();
+        failures.insert(&old);
+        let mut renamed = old.clone();
+        renamed.label = "Renamed".into();
+        assert!(failures.contains(&renamed));
+        let mut relinked = renamed.clone();
+        relinked.passage.as_mut().unwrap().revision = "v2".into();
+        assert!(!failures.contains(&relinked));
+        // Relink/Undo/Redo merely change the target being queried.
+        assert!(failures.contains(&old));
+        assert!(!failures.contains(&relinked));
+        failures.remove(&old); // A later verification wins even after more Undo.
+        assert!(!failures.contains(&renamed));
+        assert!(!failures.contains(&old));
+        failures.insert(&old);
+        let mut relocated = old.clone();
+        if let Anchor::Reflow { fraction, .. } = &mut relocated.locator.anchor {
+            *fraction = 0.5;
+        }
+        assert!(!failures.contains(&relocated));
+        failures.clear(); // New source generation.
+        assert!(!failures.contains(&old));
+    }
+    #[test]
+    fn failure_observations_are_bounded_and_refresh_existing_targets() {
+        let mut failures = Failures::default();
+        let mut reference = reference();
+        for index in 0..110 {
+            reference.id = index.to_string();
+            failures.insert(&reference);
+        }
+        assert_eq!(failures.0.len(), 100);
+        assert!(failures.contains(&reference));
+        failures.insert(&reference);
+        assert_eq!(failures.0.len(), 100);
+        reference.id = "0".into();
+        assert!(!failures.contains(&reference));
     }
 }

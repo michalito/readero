@@ -58,8 +58,15 @@ matching failures carry an explicit bridge tag. Timeout, transport, malformed
 results and temporary chapter-load failures instead offer retry feedback without
 marking the quotation unresolved or changing its saved content.
 
-The [fresh review evidence](qa/review-validation.json) records 55 core and 57
-desktop Rust tests, 10 installer tests, strict Clippy, 623 native assertions across
+Contextual recovery now updates saved targets and fallback locations through the
+shared notebook history and save path for every format, preserving the original
+quotation and connections. PDF stores unrotated selection geometry independently
+of the display rotation. Needs-relink feedback follows an exact failed target,
+so Undo restores its warning while Redo and later verification retain their own
+status. This bounded session cache is reset on source reload.
+
+The [fresh review evidence](qa/review-validation.json) records 55 core and 59
+desktop Rust tests, 10 installer tests, strict Clippy, 682 native assertions across
 Markdown/EPUB/PDF passage flows, the notebook flow and mixed-size PDF navigation,
 and 25 AT-SPI assertions.
 All pass in an isolated Ubuntu 26.04 container with synthetic data, private Xvfb,

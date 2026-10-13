@@ -100,6 +100,16 @@ impl Shell {
                     && draft.sections[0].passages == [draft.references[0].id.clone()]
             );
             if let Some(reference) = draft.references.first() {
+                let expected =
+                    std::fs::read(directory.parent().unwrap().join("recovered-reference.json"))
+                        .ok()
+                        .and_then(|bytes| {
+                            serde_json::from_slice::<readero::notebook::Reference>(&bytes).ok()
+                        });
+                checks["recovered_target_survives_restart_exactly"] =
+                    json!(expected.as_ref() == Some(reference));
+                checks["recovered_target_restarts_without_contextual_scan"] =
+                    json!(self.target_verifies_directly(reference).await);
                 self.follow_saved_passage(&reference.id);
                 settle(1200).await;
                 checks["passage_restart_navigates_and_highlights"] = json!(
@@ -940,7 +950,11 @@ impl Shell {
                 .is_some_and(|d| d.references[0] == reference
                     && d.sections[0].passages == [reference.id.clone()])
         );
+        checks["relink_new_target_has_no_old_failure"] =
+            json!(!self.notebook.passage_mode_probe(&reference.id).2);
         self.notebook_undo(false);
+        checks["relink_undo_restores_failed_target_status"] =
+            json!(self.notebook.passage_mode_probe(&reference.id).2);
         checks["relink_is_undoable"] = json!(
             self.notebook.draft.borrow().as_ref().unwrap().references[0]
                 .passage
@@ -950,6 +964,48 @@ impl Shell {
                 .starts_with('§')
         );
         self.notebook_undo(true);
+        checks["relink_redo_restores_verified_target_status"] =
+            json!(!self.notebook.passage_mode_probe(&reference.id).2);
+        self.notebook_undo(false);
+        self.notebook_metadata(|d| {
+            d.references[0].label.push_str(" renamed");
+            Ok(())
+        });
+        checks["rename_keeps_exact_target_failure"] =
+            json!(self.notebook.passage_mode_probe(&reference.id).2);
+        self.notebook_undo(false);
+        checks["rename_undo_keeps_exact_target_failure"] =
+            json!(self.notebook.passage_mode_probe(&reference.id).2);
+        self.delete_saved_passage(&reference.id);
+        settle(150).await;
+        if let Some(dialog) = self
+            .window
+            .visible_dialog()
+            .and_downcast::<adw::AlertDialog>()
+        {
+            click_button(&dialog, "Delete and disconnect");
+        }
+        self.notebook_undo(false);
+        checks["undo_deleted_failed_target_restores_its_status_and_connections"] = json!(
+            self.notebook.passage_mode_probe(&reference.id).2
+                && self.notebook.draft.borrow().as_ref().unwrap().sections[0].passages
+                    == [reference.id.clone()]
+        );
+        // Simulate the source activation boundary used by same-document reload:
+        // preserve the notebook/history, discard old-source classifications.
+        let before_reload = self.notebook.draft.borrow().clone().unwrap();
+        self.activate_notebook(self.current.borrow().clone());
+        checks["same_source_activation_clears_old_failure_without_losing_notebook"] = json!(
+            !self.notebook.passage_mode_probe(&reference.id).2
+                && self.notebook.draft.borrow().as_ref().unwrap().references
+                    == before_reload.references
+        );
+        // Restore the original successful relink after the rename branch replaced
+        // its redo transaction, preserving the existing later fixture expectations.
+        self.notebook_metadata(|d| {
+            d.references[0] = reference.clone();
+            Ok(())
+        });
         self.window.set_default_size(760, 480);
         settle(650).await;
         checks["connected_notebook_fits_small_window"] =
@@ -990,7 +1046,8 @@ impl Shell {
                 let captured = match self.surface.borrow().as_ref() {
                     Some(Surface::Pdf(pdf)) => {
                         pdf.capture_selection("rotation check").is_ok_and(|c| {
-                            c.passage.quote == expected && pdf.resolve_passage(&c.passage).is_ok()
+                            c.passage.quote == expected
+                                && pdf.resolve_passage(&c.passage, "rotation check").is_ok()
                         })
                     }
                     _ => false,
@@ -1026,6 +1083,13 @@ impl Shell {
             json!(fresh.notebook(original).await.is_ok_and(|d| d.text == NOTES
                 && d.references == [reference]
                 && d.sections.len() == 1));
+        checks.as_object_mut().unwrap().extend(
+            self.check_recovered_passage(directory)
+                .await
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         checks
     }
 }

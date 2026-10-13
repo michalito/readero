@@ -51,7 +51,7 @@ pub(super) struct Pane {
     capture_request: Cell<u64>,
     selection_available: Cell<bool>,
     pending_relink: RefCell<Option<String>>,
-    unresolved: RefCell<std::collections::HashSet<String>>,
+    unresolved: RefCell<passages::Failures>,
     pub(super) retry: gtk::Button,
     close: gtk::Button,
     pub(super) references: gtk::ListBox,
@@ -84,7 +84,11 @@ impl Pane {
         (
             self.pending_passage.borrow().is_some(),
             self.pending_relink.borrow().is_some(),
-            self.unresolved.borrow().contains(id),
+            self.draft
+                .borrow()
+                .as_ref()
+                .and_then(|d| d.references.iter().find(|r| r.id == id))
+                .is_some_and(|r| self.unresolved.borrow().contains(r)),
         )
     }
 
@@ -251,7 +255,7 @@ impl Pane {
             capture_request: Cell::new(0),
             selection_available: Cell::new(false),
             pending_relink: RefCell::new(None),
-            unresolved: RefCell::new(std::collections::HashSet::new()),
+            unresolved: RefCell::new(passages::Failures::default()),
             retry,
             close,
             references,
@@ -509,6 +513,8 @@ impl Shell {
         self.notebook
             .passage_request
             .set(self.notebook.passage_request.get() + 1);
+        // Every activation follows a new source generation, including reloads.
+        self.notebook.unresolved.borrow_mut().clear();
         if same {
             self.notebook.record.replace(record);
             return;
@@ -521,7 +527,6 @@ impl Shell {
         n.history.replace(readero::notebook::History::default());
         n.pending_passage.take();
         n.pending_relink.take();
-        n.unresolved.borrow_mut().clear();
         n.selection_available.set(false);
         n.capture_pending.set(false);
         n.selection_serial.set(n.selection_serial.get() + 1);

@@ -10,6 +10,7 @@ pub struct ResolvedPassage {
     locator: Locator,
     regions: Vec<(i32, Vec<[f64; 4]>)>,
     pub recovered: bool,
+    pub capture: Capture,
 }
 
 fn failure() -> Error {
@@ -176,7 +177,7 @@ impl Pdf {
     }
 
     /// Resolve only saved pages. Every candidate is re-extracted before display.
-    pub fn resolve_passage(&self, passage: &Passage) -> Result<ResolvedPassage> {
+    pub fn resolve_passage(&self, passage: &Passage, revision: &str) -> Result<ResolvedPassage> {
         let Target::Pdf { fragments } = &passage.target else {
             return Err(failure());
         };
@@ -188,6 +189,7 @@ impl Pdf {
             .dynamic_cast_ref::<document::DocumentText>()
             .ok_or_else(failure)?;
         let mut resolved = Vec::new();
+        let mut updated_fragments = Vec::new();
         let mut first = None;
         let mut recovered = false;
         for fragment in fragments {
@@ -254,6 +256,24 @@ impl Pdf {
             let region = selector
                 .selection_region(&rc, selection_style, &mut points)
                 .ok_or_else(failure)?;
+            let layout = if unique_match(&text, &fragment.quote, "", "").is_none() {
+                text_doc.text_layout(&page)
+            } else {
+                None
+            };
+            let (prefix, suffix) = context(&text, &fragment.quote, &region, layout.as_deref());
+            updated_fragments.push(PdfFragment {
+                page: fragment.page,
+                points: [points.x1(), points.y1(), points.x2(), points.y2()],
+                style: match selection_style {
+                    document::SelectionStyle::Word => 1,
+                    document::SelectionStyle::Line => 2,
+                    _ => 0,
+                },
+                quote: fragment.quote.clone(),
+                prefix,
+                suffix,
+            });
             let rectangles: Vec<_> = (0..region.num_rectangles())
                 .map(|i| {
                     let r = region.rectangle(i);
@@ -296,7 +316,28 @@ impl Pdf {
             }
             resolved.push((fragment.page, rectangles));
         }
+        let first_fragment = updated_fragments.first().ok_or_else(failure)?;
+        let capture = Capture {
+            locator: Locator {
+                version: 1,
+                anchor: Anchor::Pdf {
+                    page: first_fragment.page,
+                    x: first_fragment.points[0],
+                    y: first_fragment.points[1],
+                    viewport_y: 24.0,
+                },
+            },
+            passage: Passage {
+                quote: passage.quote.clone(),
+                revision: revision.into(),
+                target: Target::Pdf {
+                    fragments: updated_fragments,
+                },
+            },
+        };
+        capture.passage.validate(&capture.locator)?;
         Ok(ResolvedPassage {
+            capture,
             locator: first.ok_or_else(failure)?,
             regions: resolved,
             recovered,
