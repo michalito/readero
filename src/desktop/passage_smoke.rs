@@ -411,6 +411,61 @@ impl Shell {
             settle(800).await;
             checks["pdf_keyboard_navigation_cancels_pending_passage"] =
                 json!(!pdf.passage_highlighted());
+            self.change_settings(|settings| {
+                settings.mode = Mode::Scroll;
+                settings.pdf_sizing = "custom".into();
+                settings.pdf_scale = 2.0;
+            });
+            settle(500).await;
+            for (axis, adjustment) in [
+                ("vertical", pdf.scroll.vadjustment()),
+                ("horizontal", pdf.scroll.hadjustment()),
+            ] {
+                self.follow_saved_passage(&reference.id);
+                settle(800).await;
+                pdf.view.select_all();
+                settle(100).await;
+                let (serial, available, sensitive, _) = self.notebook.capture_probe();
+                checks[format!("pdf_{axis}_scrollbar_fixture_has_selection")] =
+                    json!(pdf.view.has_selection() && available && sensitive);
+                let move_adjustment = || {
+                    let before = adjustment.value();
+                    let maximum = adjustment.upper() - adjustment.page_size();
+                    let next = if before + 80.0 <= maximum {
+                        before + 80.0
+                    } else {
+                        before - 80.0
+                    };
+                    adjustment.set_value(next.max(adjustment.lower()));
+                    (adjustment.value() - before).abs() > 1.0
+                };
+                checks[format!("pdf_{axis}_scrollbar_moves_reader")] = json!(move_adjustment());
+                settle(100).await;
+                let (new_serial, available, sensitive, _) = self.notebook.capture_probe();
+                checks[format!("pdf_{axis}_scrollbar_invalidates_selection")] =
+                    json!(new_serial > serial && !available && !sensitive);
+                self.save_selected_passage();
+                checks[format!("pdf_{axis}_scrollbar_prevents_stale_capture")] =
+                    json!(!self.notebook.capture_probe().3);
+                self.follow_saved_passage(&reference.id);
+                settle(800).await;
+                checks[format!("pdf_{axis}_scrollbar_programmatic_restore_keeps_highlight")] =
+                    json!(pdf.passage_highlighted());
+                let before = adjustment.value();
+                move_adjustment();
+                adjustment.set_value(before);
+                checks[format!("pdf_{axis}_scrollbar_return_does_not_restore_highlight")] =
+                    json!(!pdf.passage_highlighted());
+                self.follow_saved_passage(&reference.id);
+                move_adjustment();
+                settle(800).await;
+                checks[format!("pdf_{axis}_scrollbar_cancels_pending_passage")] =
+                    json!(!pdf.passage_highlighted());
+                pdf.view.select_all();
+                settle(100).await;
+                checks[format!("pdf_{axis}_scrollbar_new_selection_is_available")] =
+                    json!(self.notebook.capture_probe().1 && self.notebook.capture_probe().2);
+            }
             self.change_settings(|current| *current = settings);
             settle(500).await;
         }

@@ -179,7 +179,7 @@ impl Shell {
         self.schedule_save();
     }
 
-    pub(super) fn toggle_focus(&self) {
+    pub(super) fn toggle_focus(self: &Rc<Self>) {
         if !self.can_interact() {
             return;
         }
@@ -216,9 +216,12 @@ impl Shell {
         self.object::<adw::HeaderBar>("header").set_visible(!focus);
         self.object::<gtk::Box>("footer").set_visible(!focus);
         self.show_notebook();
+        if focus {
+            self.save();
+        }
     }
 
-    pub(super) fn escape(&self) {
+    pub(super) fn escape(self: &Rc<Self>) {
         if !self.can_interact() {
             return;
         }
@@ -231,7 +234,7 @@ impl Shell {
         }
     }
 
-    pub(super) fn escape_chrome(&self) {
+    pub(super) fn escape_chrome(self: &Rc<Self>) {
         if self.focus.get() {
             self.toggle_focus();
         } else {

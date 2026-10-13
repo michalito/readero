@@ -397,14 +397,50 @@ Worked example 1:
                 && buffer.cursor_position() == 51
                 && buffer.iter_at_mark(&buffer.selection_bound()).offset() == 10
         );
+        buffer.begin_user_action();
+        buffer.insert(&mut buffer.end_iter(), "Focus must flush this edit.");
+        buffer.end_user_action();
         self.toggle_focus();
         checks["notebook_focus_hides_panel"] = json!(!self.notebook.panel.is_visible());
         checks["notebook_focus_mode_focuses_reader"] = json!(
             gtk::prelude::RootExt::focus(&self.window)
                 .is_some_and(|widget| widget.is_ancestor(&self.content()))
         );
+        self.reading_state.save(None).await.unwrap();
+        let saved_on_focus = self.reading_state.notebook(original.clone()).await.unwrap();
+        checks["notebook_focus_flushes_before_debounce"] = json!(
+            saved_on_focus.text == format!("{body}Focus must flush this edit.")
+                && saved_on_focus.visible
+        );
         self.toggle_focus();
         checks["notebook_focus_restores_panel"] = json!(self.notebook.panel.is_visible());
+        self.notebook_undo(false);
+        buffer.select_range(&buffer.iter_at_offset(51), &buffer.iter_at_offset(10));
+        self.toggle_focus();
+        self.toggle_notebook();
+        checks["notebook_shortcut_from_focus_shows_previously_visible_panel"] = json!(
+            !self.focus.get()
+                && self.notebook.panel.is_visible()
+                && self.notebook.draft.borrow().as_ref().unwrap().visible
+        );
+        checks["notebook_shortcut_from_focus_restores_editor_focus"] = json!(
+            gtk::prelude::RootExt::focus(&self.window)
+                .is_some_and(|widget| widget.is_ancestor(&self.notebook.panel))
+        );
+        self.toggle_notebook();
+        self.toggle_focus();
+        self.toggle_notebook();
+        checks["notebook_shortcut_from_focus_shows_previously_hidden_panel"] = json!(
+            !self.focus.get()
+                && self.notebook.panel.is_visible()
+                && self.notebook.draft.borrow().as_ref().unwrap().visible
+        );
+        self.toggle_notebook();
+        checks["notebook_shortcut_after_focus_can_hide_panel"] = json!(
+            !self.notebook.panel.is_visible()
+                && !self.notebook.draft.borrow().as_ref().unwrap().visible
+        );
+        self.toggle_notebook();
         self.window.set_default_size(760, 820);
         settle(700).await;
         checks["notebook_narrow_layout_stacks"] = json!(

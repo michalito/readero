@@ -14,7 +14,7 @@
   },
   "rust_tests": {
     "core_only_passed": 55,
-    "desktop_passed": 55
+    "desktop_passed": 57
   },
   "installer_tests_passed": 10,
   "static_checks": {
@@ -195,7 +195,7 @@
       }
     },
     "passages-pdf": {
-      "assertions": 66,
+      "assertions": 82,
       "passed": true,
       "checks": {
         "ready": true,
@@ -231,6 +231,14 @@
         "pdf_highlight_at_180_degrees": true,
         "pdf_highlight_at_270_degrees": true,
         "pdf_highlight_at_90_degrees": true,
+        "pdf_horizontal_scrollbar_cancels_pending_passage": true,
+        "pdf_horizontal_scrollbar_fixture_has_selection": true,
+        "pdf_horizontal_scrollbar_invalidates_selection": true,
+        "pdf_horizontal_scrollbar_moves_reader": true,
+        "pdf_horizontal_scrollbar_new_selection_is_available": true,
+        "pdf_horizontal_scrollbar_prevents_stale_capture": true,
+        "pdf_horizontal_scrollbar_programmatic_restore_keeps_highlight": true,
+        "pdf_horizontal_scrollbar_return_does_not_restore_highlight": true,
         "pdf_immediate_bookmark_persists_announced_page": true,
         "pdf_immediate_save_keeps_announced_page": true,
         "pdf_immediate_settings_keeps_latest_page": true,
@@ -247,6 +255,14 @@
         "pdf_selection_capability_at_180_degrees": true,
         "pdf_selection_capability_at_270_degrees": true,
         "pdf_selection_capability_at_90_degrees": true,
+        "pdf_vertical_scrollbar_cancels_pending_passage": true,
+        "pdf_vertical_scrollbar_fixture_has_selection": true,
+        "pdf_vertical_scrollbar_invalidates_selection": true,
+        "pdf_vertical_scrollbar_moves_reader": true,
+        "pdf_vertical_scrollbar_new_selection_is_available": true,
+        "pdf_vertical_scrollbar_prevents_stale_capture": true,
+        "pdf_vertical_scrollbar_programmatic_restore_keeps_highlight": true,
+        "pdf_vertical_scrollbar_return_does_not_restore_highlight": true,
         "redo_preserves_replacement_connection": true,
         "relink_is_undoable": true,
         "relink_previews_changed_quotation": true,
@@ -267,7 +283,7 @@
       }
     },
     "notebook-markdown": {
-      "assertions": 51,
+      "assertions": 56,
       "passed": true,
       "checks": {
         "ready": true,
@@ -277,6 +293,7 @@
         "notebook_failed_close_explains_draft_loss": true,
         "notebook_failed_close_keeps_editor_and_draft": true,
         "notebook_failed_load_is_not_editable_empty_text": true,
+        "notebook_focus_flushes_before_debounce": true,
         "notebook_focus_hides_panel": true,
         "notebook_focus_mode_focuses_reader": true,
         "notebook_focus_restores_panel": true,
@@ -307,6 +324,10 @@
         "notebook_save_failure_visible": true,
         "notebook_short_rtl_wrap_keeps_paragraph_end": true,
         "notebook_short_window_keeps_both_surfaces_usable": true,
+        "notebook_shortcut_after_focus_can_hide_panel": true,
+        "notebook_shortcut_from_focus_restores_editor_focus": true,
+        "notebook_shortcut_from_focus_shows_previously_hidden_panel": true,
+        "notebook_shortcut_from_focus_shows_previously_visible_panel": true,
         "notebook_switch_isolates_documents": true,
         "notebook_turn_keeps_focus_and_selection": true,
         "notebook_unsaved_draft_survives_switch": true,
@@ -447,7 +468,7 @@
     }
   },
   "provenance": [
-    "Native flows use debug smoke builds. Reflow, PDF and mixed-size PDF navigation flows were rerun for the timing corrections; the unchanged notebook and AT-SPI flows retain their previous passing runs. The subsequent storage-permission fix reran both full Rust suites and strict Clippy, with focused filesystem checks; native behavior did not change.",
+    "Native flows use fixed copies of debug smoke builds. The PDF passage and notebook flows were rerun for the scrollbar/Focus corrections; reflow, mixed-size PDF navigation and AT-SPI retain their preceding passing runs. Both full Rust suites and strict Clippy were rerun. The storage permission checks remain applicable and unchanged.",
     "The first reflow run exposed a test setup issue: selecting source text can replace the GTK editor primary selection on X11. The regression compares notebook state immediately before and after capture. All final checks pass.",
     "Earlier September evidence remains historical; this record does not assert those measurements were rerun.",
     "The first timing run passed all application assertions but its restart harness timed out because concurrent Cargo tests replaced the smoke executable with a normal build. All three focused wrappers were rerun successfully using a fixed copy of the smoke binary; these final results include restart checks."
@@ -490,5 +511,10 @@
       "other_uid_cannot_read_notebook_store": true
     },
     "filesystem_probe": "An external core-only probe ran as the container ubuntu user against synthetic fixtures, including non-owned directory/database failures; a different UID was denied reading the private database."
+  },
+  "navigation_focus_followup": {
+    "pdf_context": "Repeated PDF quotations count disjoint UTF-8 spans incrementally rather than recounting each prefix. Two desktop Rust tests cover a 100,002-character dense Unicode page and overlapping Unicode candidates with geometric disambiguation.",
+    "pdf_scrollbars": "Both adjustment axes invalidate stale capture tokens, highlights and pending navigation outside programmatic restoration. Sixteen native assertions cover movement, stale capture rejection, clearing/return, restoration, pending requests and fresh selection after scrolling.",
+    "notebook_focus": "Compute notebook visibility intent before leaving Focus. Entering Focus flushes the hidden notebook through the existing save/retry path. Five native checks cover both prior visibility states, editor focus, normal toggling afterward and an immediate storage barrier before debounce."
   }
 }

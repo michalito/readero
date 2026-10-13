@@ -589,10 +589,10 @@ impl Shell {
         if !self.can_interact() || self.current.borrow().is_none() {
             return;
         }
+        let visible = !self.notebook.panel.is_visible();
         if self.focus.get() {
             self.toggle_focus();
         }
-        let visible = !self.notebook.panel.is_visible();
         if let Some(draft) = self.notebook.draft.borrow_mut().as_mut() {
             draft.visible = visible;
         } else {

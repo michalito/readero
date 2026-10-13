@@ -32,8 +32,14 @@ including existing stores. Permission repair failures abort opening. Two Rust
 regressions and 12 isolated filesystem checks cover creation, repair, preserved
 notes, another user being denied access, and repair failures without data writes.
 
-The [fresh review evidence](qa/review-validation.json) records 55 core and 55
-desktop Rust tests, 10 installer tests, strict Clippy, 358 native assertions across
+Further navigation review makes repeated PDF quotation scans count Unicode offsets
+incrementally. Both scrollbar axes invalidate old selections and passage indications
+while programmatic restoration preserves them. The notebook shortcut opens the
+notebook when leaving Focus regardless of its prior visibility, and entering Focus
+flushes notebook edits through the existing save/retry path.
+
+The [fresh review evidence](qa/review-validation.json) records 55 core and 57
+desktop Rust tests, 10 installer tests, strict Clippy, 379 native assertions across
 Markdown/EPUB/PDF passage flows, the notebook flow and mixed-size PDF navigation,
 and 25 AT-SPI assertions.
 All pass in an isolated Ubuntu 26.04 container with synthetic data, private Xvfb,

@@ -100,6 +100,20 @@ impl Shell {
             glib::Propagation::Proceed
         });
         pdf.view.add_controller(scroll);
+        // Scrollbar changes bypass the view's wheel/key controllers. Ignore
+        // restore adjustments so a verified passage retains its indication.
+        for adjustment in [pdf.scroll.vadjustment(), pdf.scroll.hadjustment()] {
+            let weak = Rc::downgrade(self);
+            let weak_pdf = Rc::downgrade(pdf);
+            adjustment.connect_value_changed(move |_| {
+                if let (Some(s), Some(pdf)) = (weak.upgrade(), weak_pdf.upgrade())
+                    && s.is_current(generation)
+                    && !pdf.is_restoring()
+                {
+                    s.cancel_passage_navigation();
+                }
+            });
+        }
         let weak = Rc::downgrade(self);
         let weak_pdf = Rc::downgrade(pdf);
         pdf.view.connect_local("popup", false, move |values| {

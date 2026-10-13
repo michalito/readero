@@ -37,10 +37,14 @@ fn context(
         let layout = layout?;
         let mut found = None;
         let mut offset = 0;
+        let mut character_offset = 0;
+        let quote_characters = quote.chars().count();
         while let Some(relative) = text[offset..].find(quote) {
             let start = offset + relative;
-            let first = text[..start].chars().count();
-            let glyphs = layout.get(first..first + quote.chars().count())?;
+            // Each skipped span is counted once, including for overlapping
+            // matches and multibyte text on pages with repeated quotations.
+            character_offset += text[offset..start].chars().count();
+            let glyphs = layout.get(character_offset..character_offset + quote_characters)?;
             let inside = |r: &document::Rectangle| {
                 selected.contains_point(
                     ((r.x1() + r.x2()) / 2.0) as i32,
@@ -58,6 +62,7 @@ fn context(
                 found = Some(start);
             }
             offset = start + text[start..].chars().next()?.len_utf8();
+            character_offset += 1;
         }
         found
     });
@@ -382,5 +387,54 @@ impl Pdf {
                 pdf.clear_passage();
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn glyphs(text: &str) -> Vec<document::Rectangle> {
+        text.chars()
+            .enumerate()
+            .map(|(i, _)| {
+                document::Rectangle::from_coordinates(
+                    i as f64 * 2.0,
+                    0.0,
+                    i as f64 * 2.0 + 2.0,
+                    2.0,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn dense_repeated_unicode_context_uses_character_layout_offsets() {
+        let text = format!("{}éz", "éx".repeat(50_000));
+        let layout = glyphs(&text);
+        let selected =
+            gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(200_000, 0, 2, 2));
+        assert_eq!(
+            context(&text, "é", &selected, Some(&layout)),
+            ("éx".repeat(64), "z".into())
+        );
+    }
+
+    #[test]
+    fn overlapping_unicode_context_uses_selected_glyphs_without_guessing() {
+        let text = "αααα";
+        let layout = glyphs(text);
+        let selected =
+            gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(4, 0, 4, 2));
+        assert_eq!(
+            context(text, "αα", &selected, Some(&layout)),
+            ("αα".into(), String::new())
+        );
+        let ambiguous =
+            gtk::cairo::Region::create_rectangle(&gtk::cairo::RectangleInt::new(0, 0, 8, 2));
+        assert_eq!(
+            context(text, "αα", &ambiguous, Some(&layout)),
+            (String::new(), String::new())
+        );
     }
 }
