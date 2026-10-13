@@ -63,7 +63,7 @@ Override `CARGO_TARGET_DIR` or `DIST_DIR` to relocate build products or packages
 
 Useful shortcuts: `Ctrl+O` Open, `Ctrl+F` Search, `Ctrl+G` / `Ctrl+Shift+G` next/previous result, `Ctrl+D` Bookmark, `Ctrl+Shift+N` Notebook, `Ctrl+Shift+S` Save selected passage, `F7` keyboard text selection, `Ctrl+L` PDF page, `Alt+Left/Right` Back/Forward, `F8` sidebar. The menu includes a shortcut reference.
 
-Progress, bookmarks, and notebooks live in `$XDG_DATA_HOME/readero/reading.sqlite3` (normally `~/.local/share/readero/reading.sqlite3`). `READERO_DATA_DIR` selects an alternate directory for testing. Close the app before backing up the database. Original documents are never edited or imported into a managed library. Remove from recents preserves bookmarks and notebooks. Locate reconnects a moved file.
+Progress, bookmarks, and notebooks live in `$XDG_DATA_HOME/readero/reading.sqlite3` (normally `~/.local/share/readero/reading.sqlite3`). `READERO_DATA_DIR` selects an alternate directory for testing. On Unix, Readero restricts this directory and database to the current user before opening them. Close the app before backing up the database. Original documents are never edited or imported into a managed library. Remove from recents preserves bookmarks and notebooks. Locate reconnects a moved file.
 
 Highlights, OCR, cloud sync, DRM, fixed-layout EPUB guarantees, PDF forms, and source editing are outside this preview. Markdown supports CommonMark, tables, task lists, strikethrough, footnotes, and heading fragments; raw HTML is displayed as text. Automatic remote content and publication scripts are disabled. Markdown sidecar resources stay within the source directory tree.
 

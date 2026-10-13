@@ -26,9 +26,13 @@ whitespace between them. The original notebook design now labels its location-on
 description as historical and identifies F02a as delivered. Recovery scans now abort
 when navigation or a newer request supersedes them, including during document
 loading. Paged PDF navigation preserves the announced page immediately for saves,
-bookmarks and appearance changes while deferring coordinate sampling.
+bookmarks and appearance changes while deferring coordinate sampling. Unix storage
+now restricts the app directory to 0700 and database to 0600 before SQLite opens,
+including existing stores. Permission repair failures abort opening. Two Rust
+regressions and 12 isolated filesystem checks cover creation, repair, preserved
+notes, another user being denied access, and repair failures without data writes.
 
-The [fresh review evidence](qa/review-validation.json) records 53 core and 53
+The [fresh review evidence](qa/review-validation.json) records 55 core and 55
 desktop Rust tests, 10 installer tests, strict Clippy, 358 native assertions across
 Markdown/EPUB/PDF passage flows, the notebook flow and mixed-size PDF navigation,
 and 25 AT-SPI assertions.

@@ -13,8 +13,8 @@
     "data": "synthetic fixtures and fresh databases; no user documents or desktop session"
   },
   "rust_tests": {
-    "core_only_passed": 53,
-    "desktop_passed": 53
+    "core_only_passed": 55,
+    "desktop_passed": 55
   },
   "installer_tests_passed": 10,
   "static_checks": {
@@ -447,7 +447,7 @@
     }
   },
   "provenance": [
-    "Native flows use debug smoke builds. Reflow, PDF and mixed-size PDF navigation flows were rerun for the timing corrections; the unchanged notebook and AT-SPI flows retain their previous passing runs.",
+    "Native flows use debug smoke builds. Reflow, PDF and mixed-size PDF navigation flows were rerun for the timing corrections; the unchanged notebook and AT-SPI flows retain their previous passing runs. The subsequent storage-permission fix reran both full Rust suites and strict Clippy, with focused filesystem checks; native behavior did not change.",
     "The first reflow run exposed a test setup issue: selecting source text can replace the GTK editor primary selection on X11. The regression compares notebook state immediately before and after capture. All final checks pass.",
     "Earlier September evidence remains historical; this record does not assert those measurements were rerun.",
     "The first timing run passed all application assertions but its restart harness timed out because concurrent Cargo tests replaced the smoke executable with a normal build. All three focused wrappers were rerun successfully using a fixed copy of the smoke binary; these final results include restart checks."
@@ -471,5 +471,24 @@
   "hosted_review_timing_followup": {
     "reflow_cancellation": "Recovery snapshots request and selection generations and aborts after document loading and each scan yield. New navigation and appearance commands invalidate selection before queueing. Four WebKit regressions cover navigation, superseding requests, valid replacement requests and delayed document loading.",
     "pdf_page_snapshot": "Paged PDF changes retain the announced page synchronously while deferring coordinates. Stale allocation samples cannot overwrite that page. Four native regressions cover immediate save/bookmark/settings and deferred sampling; 85 mixed-size PDF/navigation assertions also pass."
+  },
+  "storage_permission_followup": {
+    "behavior": "Before SQLite opens on Unix, create or repair the application directory to 0700 and database to 0600. Abort if permission repair fails; do not change existing ancestor permissions.",
+    "regressions": "Two Rust regressions run under a separate shell with umask 022 cover fresh creation and repairing 0755/0644 stores while preserving notebook text.",
+    "filesystem_checks": {
+      "fresh/readero_directory_private": true,
+      "fresh/readero_database_private": true,
+      "repaired_directory_private": true,
+      "repaired_database_private": true,
+      "failed_directory_repair_created_no_database": true,
+      "failed_database_repair_left_contents_unchanged": true,
+      "repaired_store_contents_unchanged": true,
+      "new_store_opens": true,
+      "repaired_store_opens": true,
+      "directory_repair_failure_aborts": true,
+      "database_repair_failure_aborts": true,
+      "other_uid_cannot_read_notebook_store": true
+    },
+    "filesystem_probe": "An external core-only probe ran as the container ubuntu user against synthetic fixtures, including non-owned directory/database failures; a different UID was denied reading the private database."
   }
 }

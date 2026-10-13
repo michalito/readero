@@ -10,8 +10,36 @@ pub struct Store {
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+        // Notebook text and quotations share this database. Restrict the
+        // directory (including SQLite's auxiliary files) before opening it.
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            let mut directory = std::fs::DirBuilder::new();
+            directory.recursive(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::DirBuilderExt;
+                directory.mode(0o700);
+            }
+            directory.create(parent)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            // Create privately and repair existing stores before SQLite can
+            // initialize, migrate, or recover them. Permission failures abort.
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(path)?;
+            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
         }
         let connection = Connection::open(path)?;
         connection.busy_timeout(Duration::from_secs(3))?;
@@ -265,6 +293,59 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    #[test]
+    fn new_database_is_private_without_changing_ancestor_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        let app = temp.path().join("readero");
+        let database = app.join("reading.sqlite3");
+        let store = Store::open(&database).unwrap();
+        assert!(store.recents().unwrap().is_empty());
+        for (path, mode) in [
+            (temp.path(), 0o755),
+            (app.as_path(), 0o700),
+            (database.as_path(), 0o600),
+        ] {
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_repairs_public_permissions_and_preserves_notebook() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("book.md");
+        std::fs::write(&source, "# A book").unwrap();
+        let app = temp.path().join("readero");
+        let database = app.join("reading.sqlite3");
+        let store = Store::open(&database).unwrap();
+        let record = store.document(&source).unwrap();
+        let notebook = Notebook {
+            text: "Private notebook text".into(),
+            ..Notebook::default()
+        };
+        store.save_notebook(&record, &notebook).unwrap();
+        drop(store);
+        std::fs::set_permissions(&app, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&database, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let store = Store::open(&database).unwrap();
+        assert_eq!(store.notebook(&record).unwrap(), notebook);
+        assert_eq!(
+            std::fs::metadata(&app).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&database).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
     #[test]
     fn progress_survives_reopen_and_recents_removal_keeps_bookmarks() {
         let temp = tempfile::tempdir().unwrap();
