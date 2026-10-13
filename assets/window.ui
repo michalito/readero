@@ -85,6 +85,13 @@
               </object>
             </child>
             <child type="end">
+              <object class="GtkButton" id="notebook_button">
+                <property name="icon-name">document-edit-symbolic</property>
+                <property name="tooltip-text">Notebook (Ctrl+Shift+N)</property>
+                <style><class name="flat"/></style>
+              </object>
+            </child>
+            <child type="end">
               <object class="GtkButton" id="bookmark_button">
                 <property name="icon-name">bookmark-new-symbolic</property>
                 <property name="tooltip-text">Bookmark this passage (Ctrl+D)</property>
@@ -125,6 +132,7 @@
             <property name="vexpand">true</property>
             <child>
               <object class="GtkRevealer" id="sidebar_revealer">
+                <property name="hexpand">false</property>
                 <property name="transition-type">slide-right</property>
                 <property name="transition-duration">0</property>
                 <property name="child">
@@ -224,10 +232,28 @@
               </object>
             </child>
             <child>
-              <object class="GtkStack" id="content">
+              <object class="AdwBreakpointBin" id="reading_area">
                 <property name="hexpand">true</property>
                 <property name="vexpand">true</property>
-                <property name="transition-type">none</property>
+                <property name="width-request">320</property>
+                <property name="height-request">320</property>
+                <property name="child">
+                  <object class="GtkPaned" id="reading_split">
+                    <property name="hexpand">true</property>
+                    <property name="vexpand">true</property>
+                    <property name="resize-start-child">true</property>
+                    <property name="resize-end-child">false</property>
+                    <property name="shrink-start-child">false</property>
+                    <property name="shrink-end-child">false</property>
+                    <property name="start-child">
+                      <object class="GtkStack" id="content">
+                        <property name="hexpand">true</property>
+                        <property name="vexpand">true</property>
+                        <property name="transition-type">none</property>
+                      </object>
+                    </property>
+                  </object>
+                </property>
               </object>
             </child>
           </object>

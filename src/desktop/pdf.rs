@@ -7,11 +7,15 @@ use std::{
     rc::Rc,
     time::Duration,
 };
+mod passages;
 
 pub struct Pdf {
     pub view: papers::View,
     pub model: papers::DocumentModel,
     pub scroll: gtk::ScrolledWindow,
+    pub widget: gtk::Overlay,
+    passage_overlay: gtk::DrawingArea,
+    passage_regions: RefCell<Vec<(i32, Vec<[f64; 4]>)>>,
     pub search: papers::SearchContext,
     restoring: Cell<bool>,
     restore_serial: Cell<u64>,
@@ -52,10 +56,19 @@ impl Pdf {
             .child(&view)
             .build();
         scroll.add_css_class("pdf-surface");
+        let widget = gtk::Overlay::new();
+        widget.set_child(Some(&scroll));
+        let passage_overlay = gtk::DrawingArea::new();
+        passage_overlay.add_css_class("passage-overlay");
+        passage_overlay.set_can_target(false);
+        widget.add_overlay(&passage_overlay);
         let pdf = Rc::new(Self {
             view,
             model,
             scroll,
+            widget,
+            passage_overlay,
+            passage_regions: RefCell::new(Vec::new()),
             search,
             restoring: Cell::new(true),
             restore_serial: Cell::new(0),
@@ -65,18 +78,39 @@ impl Pdf {
         });
         pdf.configure(settings);
         pdf.model.set_document(Some(doc));
+        pdf.wire_passage_overlay();
         for adjustment in [pdf.scroll.vadjustment(), pdf.scroll.hadjustment()] {
             let weak = Rc::downgrade(&pdf);
             adjustment.connect_value_changed(move |_| {
                 if let Some(pdf) = weak.upgrade() {
                     pdf.emit_position();
+                    pdf.passage_overlay.queue_draw();
                 }
             });
         }
         let weak = Rc::downgrade(&pdf);
         pdf.model.connect_page_changed(move |_, _, _| {
-            if let Some(pdf) = weak.upgrade() {
-                pdf.emit_position();
+            // Papers can announce the new page before its view is allocated.
+            // In paged mode the scroll adjustment may stay at zero, so there
+            // need not be a later scroll event to correct the old page's anchor.
+            if let Some(pdf) = weak.upgrade()
+                && !pdf.is_restoring()
+            {
+                let serial = pdf.restore_serial.get();
+                let weak = Rc::downgrade(&pdf);
+                let after_layout = Cell::new(false);
+                pdf.view.add_tick_callback(move |_, _| {
+                    // Ticks precede allocation; sample on the following frame.
+                    if !after_layout.replace(true) {
+                        return glib::ControlFlow::Continue;
+                    }
+                    if let Some(pdf) = weak.upgrade()
+                        && pdf.restore_serial.get() == serial
+                    {
+                        pdf.emit_position();
+                    }
+                    glib::ControlFlow::Break
+                });
             }
         });
         pdf

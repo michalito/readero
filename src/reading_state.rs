@@ -4,7 +4,7 @@
 //! awaited. Dropping or delaying a reply never cancels the operation. SQLite,
 //! retained snapshots, and identity reconciliation have the same owner. The
 //! desktop supplies stable snapshots and owns its debounce and native widgets.
-use crate::{document::*, state::Store};
+use crate::{document::*, notebook::Notebook, state::Store};
 use std::{
     collections::HashMap,
     future::{Future, IntoFuture},
@@ -63,6 +63,22 @@ struct Observed {
     identities: HashMap<String, (String, PathBuf)>,
 }
 
+impl Observed {
+    fn same_document(&self, a: &DocumentRecord, b: &DocumentRecord) -> bool {
+        let (a_id, a_path) = self.identity(a);
+        let (b_id, b_path) = self.identity(b);
+        a_id == b_id || a_path == b_path
+    }
+
+    fn identity<'a>(&'a self, record: &'a DocumentRecord) -> (&'a str, &'a Path) {
+        self.identities
+            .get(&record.id)
+            .map_or((&record.id, record.path.as_path()), |(id, path)| {
+                (id, path.as_path())
+            })
+    }
+}
+
 #[derive(Clone)]
 pub struct ReadingState {
     sender: mpsc::Sender<Work>,
@@ -80,6 +96,7 @@ impl ReadingState {
                     store: Store::open(&database),
                     database,
                     pending: Vec::new(),
+                    notebooks: Vec::new(),
                     observed: shared,
                 };
                 while let Ok(work) = receiver.recv() {
@@ -113,6 +130,49 @@ impl ReadingState {
 
     pub fn recents(&self) -> Reply<Vec<DocumentRecord>> {
         self.call(|state| state.store()?.recents())
+    }
+
+    /// A failed load is never an empty notebook. Retained drafts take precedence
+    /// over disk, including after a provisional document has been reconciled.
+    pub fn notebook(&self, mut record: DocumentRecord) -> Reply<Notebook> {
+        self.call(move |state| {
+            reconcile(
+                &state.observed.lock().expect("reading-state observation"),
+                &mut record,
+            );
+            let identities = state.observed.lock().expect("reading-state observation");
+            if let Some((_, notebook)) = state
+                .notebooks
+                .iter()
+                .rev()
+                .find(|(r, _)| identities.same_document(r, &record))
+            {
+                return Ok(notebook.clone());
+            }
+            drop(identities);
+            state.store()?.notebook(&record)
+        })
+    }
+
+    /// Retain the latest complete draft before attempting any writes. Replies
+    /// acknowledge queue completion, never ownership of the live editor buffer.
+    pub fn save_notebook(&self, mut record: DocumentRecord, notebook: Notebook) -> Reply<()> {
+        self.call(move |state| {
+            notebook.validate()?;
+            reconcile(
+                &state.observed.lock().expect("reading-state observation"),
+                &mut record,
+            );
+            let identities = state.observed.lock().expect("reading-state observation");
+            state
+                .notebooks
+                .retain(|(r, _)| !identities.same_document(r, &record));
+            drop(identities);
+            state.notebooks.push((record, notebook));
+            let result = state.flush();
+            state.publish(&result);
+            result
+        })
     }
 
     pub fn locate(&self, id: String, path: PathBuf) -> Reply<DocumentRecord> {
@@ -225,6 +285,7 @@ struct State {
     store: Result<Store>,
     // Oldest first. Replacement appends, so Locate selects the newest session.
     pending: Vec<DocumentRecord>,
+    notebooks: Vec<(DocumentRecord, Notebook)>,
     observed: Arc<Mutex<Observed>>,
 }
 impl State {
@@ -305,10 +366,39 @@ impl State {
                 }
             }
         }
+        for (mut record, notebook) in std::mem::take(&mut self.notebooks) {
+            reconcile(
+                &self.observed.lock().expect("reading-state observation"),
+                &mut record,
+            );
+            match self.store()?.save_notebook(&record, &notebook) {
+                Ok(saved) => self.acknowledge(&record, &saved),
+                Err(failed) => {
+                    self.notebooks.push((record, notebook));
+                    if error.is_none() {
+                        error = Some(failed);
+                    }
+                }
+            }
+        }
         error.map_or(Ok(()), Err)
     }
 
     fn locate(&mut self, id: &str, path: &Path) -> Result<DocumentRecord> {
+        let notebook_sessions = self
+            .notebooks
+            .iter()
+            .filter_map(|(session, _)| {
+                match self
+                    .store()
+                    .and_then(|store| store.stored_identity(session))
+                {
+                    Ok(Some((saved_id, _))) if saved_id == id => Some(Ok(session.clone())),
+                    Err(error) => Some(Err(error)),
+                    _ => None,
+                }
+            })
+            .collect::<Result<Vec<_>>>()?;
         let (record, sessions) = self.store()?.relink_sessions(id, path, &self.pending)?;
         for session in &self.pending {
             if session.id == record.id || sessions.contains(&session.id) {
@@ -316,6 +406,9 @@ impl State {
             }
         }
         self.acknowledge(&record, &record);
+        for session in &notebook_sessions {
+            self.acknowledge(session, &record);
+        }
         // Locate has already durably written the newest retained state.
         self.pending
             .retain(|r| r.id != record.id && !sessions.contains(&r.id));
@@ -324,10 +417,10 @@ impl State {
 
     fn publish<T>(&self, result: &Result<T>) {
         let mut observed = self.observed.lock().expect("reading-state observation");
-        observed.status.pending = !self.pending.is_empty();
+        observed.status.pending = !self.pending.is_empty() || !self.notebooks.is_empty();
         match result {
             Err(error) => observed.status.error = Some(error.to_string()),
-            Ok(_) if self.pending.is_empty() => observed.status.error = None,
+            Ok(_) if !observed.status.pending => observed.status.error = None,
             Ok(_) => {}
         }
     }

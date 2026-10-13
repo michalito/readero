@@ -10,7 +10,10 @@ export function rangeAt(doc, x = 24, y = 24) {
     range.selectNodeContents(root);
     const rect = root.getBoundingClientRect();
     if (rect.height)
-      svgPositions.set(range, Math.max(0, Math.min(1, (y - rect.top) / rect.height)));
+      svgPositions.set(
+        range,
+        Math.max(0, Math.min(1, (y - rect.top) / rect.height)),
+      );
     return range;
   }
   const range = doc.caretRangeFromPoint?.(x, Math.max(1, y));
@@ -68,7 +71,7 @@ export function rangeAt(doc, x = 24, y = 24) {
 // DOM Range offsets are UTF-16 code units. Cache text positions by document;
 // typography and image layout do not change this index.
 const textIndexes = new WeakMap();
-function textIndex(root) {
+export function textIndex(root) {
   let index = textIndexes.get(root);
   if (index) return index;
   const doc = root.ownerDocument ?? root;
@@ -138,8 +141,8 @@ export function locatorFor(book, index, range, fraction = 0) {
   fraction = svgPositions.get(range) ?? fraction;
   const anchor = range.cloneRange();
   anchor.collapse(true);
-  const point = anchor.startContainer.localName === "svg"
-    ? null : textPoint(anchor);
+  const point =
+    anchor.startContainer.localName === "svg" ? null : textPoint(anchor);
   const element =
     anchor.startContainer.nodeType === Node.ELEMENT_NODE
       ? anchor.startContainer
@@ -172,7 +175,8 @@ export function locatorFor(book, index, range, fraction = 0) {
     // Root-level SVG anchors represent a geometric position, which a CFI
     // cannot encode. Persist the section and proportional position instead.
     cfi:
-      anchor.startContainer === anchor.startContainer.ownerDocument?.documentElement
+      anchor.startContainer ===
+      anchor.startContainer.ownerDocument?.documentElement
         ? ""
         : CFI.joinIndir(book.sections[index].cfi, CFI.fromRange(anchor)),
     section: index,
@@ -210,7 +214,11 @@ export function resolveLocator(book, locator, changed = false) {
     index,
     recovery: "cfi",
     anchor: (doc) => {
-      if (doc.documentElement.localName === "svg" && !locator.cfi && !locator.quote) {
+      if (
+        doc.documentElement.localName === "svg" &&
+        !locator.cfi &&
+        !locator.quote
+      ) {
         result.recovery = "fraction";
         return Math.max(0, Math.min(1, locator.fraction || 0));
       }
@@ -270,7 +278,12 @@ export function rangeRect(anchor) {
   const fraction = svgPositions.get(anchor);
   if (fraction !== undefined) {
     const rect = anchor.startContainer.getBoundingClientRect();
-    return new DOMRect(rect.left, rect.top + fraction * rect.height, rect.width, 1);
+    return new DOMRect(
+      rect.left,
+      rect.top + fraction * rect.height,
+      rect.width,
+      1,
+    );
   }
   if (typeof anchor?.cloneRange === "function") {
     const rect = anchor.getBoundingClientRect();

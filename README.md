@@ -56,15 +56,62 @@ Override `CARGO_TARGET_DIR` or `DIST_DIR` to relocate build products or packages
 - Open through the file picker, drag-and-drop, a file argument, or Open With.
 - Return through Continue/recent documents, with per-document position and appearance.
 - Use contents, whole-document search, bookmarks, and Back/Forward for intentional jumps.
+- Keep a plain-text notebook beside each document, with named links back to saved passages.
 - Adjust reflowable text, width, line spacing, and light/warm/dark reading palettes. PDFs retain their original page colors and offer zoom, fit, and rotation.
 - Focus (`F9`) hides reading controls; fullscreen (`F11`) is independent. Escape brings controls back.
 - Inspect an EPUB/Markdown illustration by clicking it or focusing it and pressing Enter. Escape closes the image first and returns focus. Code and tables have keyboard scrolling when oversized.
 
-Useful shortcuts: `Ctrl+O` Open, `Ctrl+F` Search, `Ctrl+G` / `Ctrl+Shift+G` next/previous result, `Ctrl+D` Bookmark, `Ctrl+L` PDF page, `Alt+Left/Right` Back/Forward, `F8` sidebar. The menu includes a shortcut reference.
+Useful shortcuts: `Ctrl+O` Open, `Ctrl+F` Search, `Ctrl+G` / `Ctrl+Shift+G` next/previous result, `Ctrl+D` Bookmark, `Ctrl+Shift+N` Notebook, `Ctrl+Shift+S` Save selected passage, `F7` keyboard text selection, `Ctrl+L` PDF page, `Alt+Left/Right` Back/Forward, `F8` sidebar. The menu includes a shortcut reference.
 
-Progress and bookmarks live in `$XDG_DATA_HOME/readero/reading.sqlite3` (normally `~/.local/share/readero/reading.sqlite3`). `READERO_DATA_DIR` selects an alternate directory for testing. Close the app before backing up the database. Original documents are never edited or imported into a managed library. Remove from recents preserves bookmarks. Locate reconnects a moved file.
+Progress, bookmarks, and notebooks live in `$XDG_DATA_HOME/readero/reading.sqlite3` (normally `~/.local/share/readero/reading.sqlite3`). `READERO_DATA_DIR` selects an alternate directory for testing. Close the app before backing up the database. Original documents are never edited or imported into a managed library. Remove from recents preserves bookmarks and notebooks. Locate reconnects a moved file.
 
-Notes, highlights, OCR, cloud sync, DRM, fixed-layout EPUB guarantees, PDF forms, and source editing are outside this preview. Markdown supports CommonMark, tables, task lists, strikethrough, footnotes, and heading fragments; raw HTML is displayed as text. Automatic remote content and publication scripts are disabled. Markdown sidecar resources stay within the source directory tree.
+Highlights, OCR, cloud sync, DRM, fixed-layout EPUB guarantees, PDF forms, and source editing are outside this preview. Markdown supports CommonMark, tables, task lists, strikethrough, footnotes, and heading fragments; raw HTML is displayed as text. Automatic remote content and publication scripts are disabled. Markdown sidecar resources stay within the source directory tree.
+
+## Notebook
+
+Use the pencil button or `Ctrl+Shift+N` to open your document's notebook. It is a
+plain-text editor with shared text-and-connection undo/redo, native selection and clipboard support. Drag the
+divider to resize it; narrow windows place it below the reader. Focus temporarily
+hides it. Reading navigation and Markdown source reloads preserve the live draft.
+Cursor, selection, scroll position and visibility return when you reopen it.
+
+Select text in the document, then choose **Save selected passage** from its
+context menu, the notebook, or `Ctrl+Shift+S`. The full quotation and source range
+are saved together. The arrow menu beside that button also offers **Save current
+location**, useful for illustrations or scanned pages without selectable text.
+`F7` toggles keyboard text selection; use Shift+arrows in the reading view. Papers
+requires upright PDF pages for new selections, so a rotated PDF offers **Rotate
+upright to select**. Existing passages can be opened and marked at every rotation.
+
+Select a sentence or several paragraphs in your notebook and choose **Connect…**
+to pick a saved passage. Alternatively, use a passage's **Connect this passage to
+notes** button, select your explanation, and press **Connect notes**. With only a
+caret, Connect selects the current paragraph. Escape cancels a pending connection.
+
+Connected notes are underlined. Click their adjacent source arrow or Ctrl+click
+linked text to open the passage; ordinary clicks still edit your notes. One
+section can have several sources, and one passage can support several sections.
+Multiple sources open a chooser. Back returns to the prior reading position.
+The information button shows the full saved quotation; its name is editable.
+
+Connections follow text edits. Replacing a complete section keeps its sources;
+deleting it removes its connections while preserving the saved passages. Undo
+and Redo restore text and connections together. Removing a connection keeps both
+notes and passage. Deleting a connected passage asks before disconnecting it.
+If source words can no longer be identified confidently, Readero preserves the
+quotation and offers an explicit last-known location or a previewed **Relink**.
+
+Text and references save automatically, with a 750 ms pause and a two-second
+maximum while editing. Leaving a document or closing flushes changes. Storage
+failures show Retry and keep drafts in memory, including across document switches.
+If Close reports an error, choose **Keep open** to preserve unsaved work. **Close
+anyway** can lose it. An unreadable notebook stays disabled until Retry succeeds;
+it is never silently replaced with an empty notebook.
+
+The database upgrades transactionally to schema v3, preserving existing reading
+state, bookmarks, and legacy location-only references. Older builds cannot open the upgraded database. Back it up
+before upgrading if you need to return to an older build. Notebook export and
+highlights remain future features. See the [notebook design](docs/NOTEBOOK.md) and [passage connections](docs/PASSAGE_CONNECTIONS.md).
 
 ## Build
 
@@ -115,7 +162,19 @@ The smoke checks include exact bookmark recovery after edits, delayed images, wi
 
 For the protected-PDF flow, install the test-only Python `pypdf` dependency, then run `python3 tests/fixtures/protect.py /tmp/readero-build/fixtures/reading.pdf /tmp/readero-build/fixtures/protected.pdf` and pass `--protected-fixture` with that file.
 
+Add `--notebook-only` for the focused notebook flow, including a second process
+that verifies saved text, selection, and passage references after restart.
+Use `--passages-only` for real source-selection capture, section connections,
+relinking, shared undo, navigation indicators, and process-restart coverage.
+`scripts/wayland-scale-smoke.py --passages-only` runs that flow in a private
+GNOME compositor at its requested scales without changing the host display.
+
 Use a fresh output directory for each run. Evidence contains reading locators, passages, and screenshots: keep personal-document runs outside the repository. `checks.json` contains only safe boolean outcomes. `--wayland` exercises the current desktop; the default uses Xvfb/software rendering. These flows establish behavior, not PRD startup/frame-time percentiles.
+
+`--startup-only` limits the flow to Home, opening, native snapshots, and closing,
+for repeated startup trials. `--startup-recovery` deliberately stalls WebKit past
+the 30-second opening deadline and checks recovery, preservation of notes, retry,
+and cancellation. It takes about 100 seconds and uses only the isolated test data.
 
 Separate native probes use the optimized application without the smoke driver's fixed navigation waits:
 
@@ -124,15 +183,40 @@ python3 scripts/native-qualify.py --binary /path/to/smoke-enabled-readero \
   --file examples/quiet-reading.md --output /tmp/readero-restart --mode restart
 python3 scripts/native-qualify.py --binary /path/to/smoke-enabled-readero \
   --file examples/quiet-reading.md --output /tmp/readero-timing --mode timing
+python3 scripts/native-qualify.py --binary /path/to/smoke-enabled-readero \
+  --file examples/quiet-reading.md --output /tmp/readero-notebook-perf \
+  --mode notebook --backend x11
 xvfb-run -a dbus-run-session -- python3 scripts/accessibility-smoke.py \
   --binary /path/to/readero --output /tmp/readero-accessibility
+python3 scripts/wayland-scale-smoke.py --binary /path/to/smoke-enabled-readero \
+  --file examples/quiet-reading.md --output /tmp/readero-scales
 ```
 
 `restart` checks forced termination, an interrupted SQLite writer, and closing during a layout change, all against isolated state. `timing` collects 10 launches and 30 reopens on the current Wayland desktop; `idle` measures the actual app process tree after 40 turns and 20 mode changes. These are diagnostic observations, not a claim that the full PRD performance protocol has passed. The accessibility script inspects native controls, headings, and text through AT-SPI; it does not run an Orca usability session. Python GI/AT-SPI bindings are required for that check.
 
+`notebook` measures native editing, scroll-position lookup, and saving with large
+generated notebooks. `notebook-idle` measures the app process tree after reading
+and editing with the notebook open. All probes support `--backend x11` for an
+isolated Xvfb display; the default uses the current Wayland desktop. Exceptionally
+long single paragraphs remain more expensive for GTK to lay out than the same
+amount of text divided into paragraphs.
+
+The scale harness uses a private headless GNOME compositor and virtual keyboard
+at 100%, 125%, 150%, and 200%, checking the actual GDK backend and surface scale.
+It never changes the current desktop's display settings. GNOME Shell and Python
+GI are required; repeat `--file` to cover multiple formats. The fixture generator
+also creates an EPUB 2/NCX book, a 1,200-page PDF, and an 80-page image-only PDF.
+
+Add `--orca` to the accessibility command to run real Orca announcement and
+keyboard checks. It requires Orca, Speech Dispatcher, and Python Xlib, and uses
+private settings plus a silent speech output module. This verifies announcement
+generation, typing, undo/redo, and passage-reference editing; a human listening
+and usability session remains separate. Readiness/idle probes now request
+1050 × 800 logical pixels and record the actual size, backend, renderer, and scale.
+
 ## Code and decisions
 
-Rust/GTK4/libadwaita own the shell; Papers owns PDF rendering; WebKitGTK with pinned foliate-js handles EPUB and rendered Markdown. A dedicated worker owns SQLite. Document identity and versioned locators are independent of the presentation mode, leaving a path to linked notes later.
+Rust/GTK4/libadwaita own the shell; Papers owns PDF rendering; WebKitGTK with pinned foliate-js handles EPUB and rendered Markdown. A dedicated worker owns SQLite. Document identity and versioned locators are independent of the presentation mode, with linked notebooks using the same identities and locators.
 
 - [Finalized MVP PRD](docs/MVP_PRD.md)
 - [Future features and proposed roadmap](docs/ROADMAP.md)

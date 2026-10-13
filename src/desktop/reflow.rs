@@ -49,6 +49,10 @@ pub struct Message {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Event {
+    Selection {
+        serial: u64,
+        available: bool,
+    },
     Ready {
         title: String,
         toc: Vec<TocItem>,
@@ -86,6 +90,7 @@ pub enum Event {
 }
 #[derive(Serialize)]
 struct Config<'a> {
+    revision: &'a str,
     host: &'a str,
     generation: u64,
     entries: &'a [resource::ResourceInfo],
@@ -110,6 +115,7 @@ impl Reflow {
     ) -> Self {
         let host = format!("document-{}", uuid::Uuid::new_v4());
         let config = serde_json::to_string(&Config {
+            revision: &record.revision,
             host: &host,
             generation,
             entries: &publication.entries,
@@ -218,6 +224,7 @@ impl Reflow {
         settings.set_allow_file_access_from_file_urls(false);
         settings.set_allow_universal_access_from_file_urls(false);
         settings.set_javascript_can_open_windows_automatically(false);
+        settings.set_enable_caret_browsing(true);
         settings.set_enable_developer_extras(cfg!(debug_assertions));
         let session = webkit::NetworkSession::new_ephemeral();
         let view = webkit::WebView::builder()
@@ -264,6 +271,26 @@ impl Reflow {
         let script = format!("globalThis.readeroCommand?.({value});");
         self.view
             .evaluate_javascript(&script, Some(WORLD), None, gio::Cancellable::NONE, |_| {});
+    }
+    pub fn selection_request<T: serde::de::DeserializeOwned + 'static>(
+        &self,
+        function: &str,
+        argument: serde_json::Value,
+    ) -> impl std::future::Future<Output = Result<T>> + 'static {
+        let script = format!("return JSON.stringify(await globalThis.{function}({argument}));");
+        let pending =
+            self.view
+                .call_async_javascript_function_future(&script, None, Some(WORLD), None);
+        async move {
+            let value = glib::future_with_timeout(std::time::Duration::from_secs(5), pending).await
+                .map_err(|_| Error::Invalid("The reading view did not finish capturing or resolving the passage. Try again.".into()))?
+                .map_err(|error| Error::Invalid(error.to_string()))?;
+            let text = value.to_str();
+            if text.len() > 2 * 1024 * 1024 {
+                return Err(Error::Invalid("Select a shorter passage.".into()));
+            }
+            Ok(serde_json::from_str(&text)?)
+        }
     }
     pub fn checkpoint(
         &self,
@@ -324,6 +351,7 @@ fn asset(path: &str) -> Option<&'static str> {
         "reader.js" => Some(include_str!("../../assets/reader.js")),
         "search.js" => Some(include_str!("../../assets/search.js")),
         "anchors.js" => Some(include_str!("../../assets/anchors.js")),
+        "passages.js" => Some(include_str!("../../assets/passages.js")),
         "interaction.js" => Some(include_str!("../../assets/interaction.js")),
         "continuous.js" => Some(include_str!("../../assets/continuous.js")),
         "foliate/epub.js" => Some(include_str!("../../assets/foliate/epub.js")),

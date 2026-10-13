@@ -63,11 +63,13 @@ pub struct Shell {
     focus: Cell<bool>,
     sidebar_before_focus: Cell<bool>,
     updating: Cell<bool>,
+    notebook: notebook::Pane,
 }
 
 mod controls;
 mod home;
 mod navigation;
+mod notebook;
 mod opening;
 mod persistence;
 
@@ -85,6 +87,7 @@ impl Shell {
         toasts.set_child(content.as_ref());
         window.set_content(Some(&toasts));
         let shell = Rc::new(Self {
+            notebook: notebook::Pane::new(ui.object("reading_split").expect("reading split")),
             window,
             toasts,
             ui,
@@ -106,6 +109,7 @@ impl Shell {
             .object::<gtk::MenuButton>("appearance_button")
             .update_property(&[gtk::accessible::Property::Label("Reading appearance")]);
         shell.wire();
+        shell.wire_notebook();
         shell.home();
         shell
     }

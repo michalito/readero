@@ -1,5 +1,6 @@
 //! A single-owner database. The desktop layer runs this on its state worker.
 use crate::document::*;
+use crate::notebook::Notebook;
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{cell::RefCell, collections::HashMap, path::Path, time::Duration};
 
@@ -15,7 +16,7 @@ impl Store {
         let connection = Connection::open(path)?;
         connection.busy_timeout(Duration::from_secs(3))?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 1 {
+        if version > 3 {
             return Err(Error::Invalid(
                 "This reading database was created by a newer Readero. It has been left unchanged."
                     .into(),
@@ -39,6 +40,20 @@ impl Store {
                 CREATE INDEX bookmarks_document ON bookmarks(document_id);
                 PRAGMA user_version=1;
                 COMMIT;")?;
+        }
+        if version < 2 {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute_batch(
+                "CREATE TABLE notebooks (
+                document_id TEXT PRIMARY KEY REFERENCES documents(id), payload TEXT NOT NULL);
+                PRAGMA user_version=2;",
+            )?;
+            transaction.commit()?;
+        }
+        if version < 3 {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.pragma_update(None, "user_version", 3)?;
+            transaction.commit()?;
         }
         Ok(Self {
             connection,
@@ -92,16 +107,7 @@ impl Store {
     pub(crate) fn save_session_record(&self, record: &DocumentRecord) -> Result<DocumentRecord> {
         let session_id = record.id.clone();
         let transaction = self.connection.unchecked_transaction()?;
-        let session_ids = self.session_ids.borrow();
-        let id = session_ids.get(&record.id).unwrap_or(&record.id);
-        let existing: Option<(String, String)> = transaction
-            .query_row(
-                "SELECT id, path FROM documents WHERE id=?2 OR path=?1
-                    ORDER BY (id=?2) DESC LIMIT 1",
-                params![record.path.to_string_lossy(), id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
+        let existing = self.stored_identity(record)?;
         let mut record = record.clone();
         if let Some((id, path)) = existing {
             record.id = id;
@@ -109,11 +115,75 @@ impl Store {
         }
         self.save(&record)?;
         transaction.commit()?;
-        drop(session_ids);
         self.session_ids
             .borrow_mut()
             .insert(session_id, record.id.clone());
         Ok(record)
+    }
+
+    pub(crate) fn stored_identity(
+        &self,
+        record: &DocumentRecord,
+    ) -> Result<Option<(String, String)>> {
+        let session_ids = self.session_ids.borrow();
+        let id = session_ids.get(&record.id).unwrap_or(&record.id);
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT id, path FROM documents WHERE id=?2 OR path=?1
+                    ORDER BY (id=?2) DESC LIMIT 1",
+                params![record.path.to_string_lossy(), id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
+    pub fn notebook(&self, record: &DocumentRecord) -> Result<Notebook> {
+        let Some((id, _)) = self.stored_identity(record)? else {
+            return Ok(Notebook::default());
+        };
+        let json: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT payload FROM notebooks WHERE document_id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let notebook: Notebook = json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()?
+            .unwrap_or_default();
+        notebook.upgrade()
+    }
+
+    /// Notebook retries must not resurrect a removed recent or overwrite newer
+    /// reading progress. Only create a document when its identity is unknown.
+    pub(crate) fn save_notebook(
+        &self,
+        record: &DocumentRecord,
+        notebook: &Notebook,
+    ) -> Result<DocumentRecord> {
+        notebook.validate()?;
+        let transaction = self.connection.unchecked_transaction()?;
+        self.notebook(record)?; // Never replace an unreadable/newer payload.
+        let mut saved = record.clone();
+        if let Some((id, path)) = self.stored_identity(record)? {
+            saved.id = id;
+            saved.path = path.into();
+        } else {
+            self.save(&saved)?;
+        }
+        self.connection.execute(
+            "INSERT INTO notebooks(document_id,payload) VALUES(?1,?2)
+             ON CONFLICT(document_id) DO UPDATE SET payload=excluded.payload",
+            params![saved.id, serde_json::to_string(notebook)?],
+        )?;
+        transaction.commit()?;
+        self.session_ids
+            .borrow_mut()
+            .insert(record.id.clone(), saved.id.clone());
+        Ok(saved)
     }
     pub fn hide(&self, id: &str) -> Result<()> {
         self.connection

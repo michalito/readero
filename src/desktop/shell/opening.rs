@@ -39,6 +39,7 @@ struct Candidate {
     reader: Option<(DocumentRecord, Reflow)>,
     job: Option<papers_view::JobLoad>,
     password: Option<adw::AlertDialog>,
+    startup_timer: Option<glib::SourceId>,
     sidebar: bool,
 }
 
@@ -96,6 +97,7 @@ impl Shell {
             reader: None,
             job: None,
             password: None,
+            startup_timer: None,
             sidebar: self.sidebar().reveals_child(),
         }));
         if let Err(error) = Format::from_path(&path) {
@@ -202,9 +204,10 @@ impl Shell {
                             s.position(locator, &label);
                         }
                     });
-                    s.content().add_named(&pdf.scroll, Some("reader"));
+                    s.content().add_named(&pdf.widget, Some("reader"));
                     s.content().set_visible_child_name("reader");
                     s.surface.replace(Some(Surface::Pdf(Rc::clone(&pdf))));
+                    s.wire_pdf_passages(&pdf, generation);
                     let title = doc
                         .title()
                         .filter(|title| !title.trim().is_empty())
@@ -223,16 +226,21 @@ impl Shell {
                     s.arm_reload();
                     let weak = Rc::downgrade(&s);
                     let weak_pdf = Rc::downgrade(&pdf);
-                    pdf.view.connect_handle_link(move |_, _, _| {
+                    // Papers can supply a null origin. The generated binding
+                    // assumes both signal arguments are non-null; we only need
+                    // the notification, so leave those values undecoded.
+                    pdf.view.connect_local("handle-link", false, move |_| {
                         if let Some(s) = weak.upgrade()
                             && s.is_current(generation)
                             && let Some(pdf) = weak_pdf.upgrade()
                             && !pdf.is_restoring()
                             && let Some(locator) = pdf.stable_location()
                         {
+                            s.cancel_passage_navigation();
                             s.push_history(locator);
                             s.sync_controls();
                         }
+                        None
                     });
                     let weak = Rc::downgrade(&s);
                     pdf.view.connect_external_link(move |_, action| {
@@ -328,6 +336,7 @@ impl Shell {
         if self.is_opening() {
             self.cancel_open();
         }
+        self.cancel_passage_navigation();
         true
     }
 
@@ -367,6 +376,9 @@ impl Shell {
         self.opening.serial.set(self.opening.serial.get() + 1);
         let candidate = self.opening.candidate.take();
         if let Some(candidate) = candidate {
+            if let Some(timer) = candidate.startup_timer {
+                timer.remove();
+            }
             if retry_reload && candidate.request.reload && self.opening.dirty.borrow().is_none() {
                 self.opening.dirty.replace(Some(candidate.request.path));
             }
@@ -413,6 +425,9 @@ impl Shell {
             .candidate
             .take()
             .expect("only a ready candidate can commit");
+        if let Some(timer) = candidate.startup_timer {
+            timer.remove();
+        }
         let same_document = self
             .current
             .borrow()
@@ -431,6 +446,7 @@ impl Shell {
         }
         let generation = self.advance_document();
         self.current.replace(Some(record));
+        self.activate_notebook(self.current.borrow().clone());
         if !candidate.request.reload {
             let (back, forward) = candidate.request.history.unwrap_or_default();
             self.back.replace(back);
@@ -499,6 +515,7 @@ impl Shell {
                     s.content().set_visible_child_name("reader");
                     reader.view.set_sensitive(true);
                     s.surface.replace(Some(Surface::Reflow(reader)));
+                    s.wire_reflow_passages();
                     message.generation = generation;
                     s.web_message(message);
                     s.opening_controls(true);
@@ -530,6 +547,23 @@ impl Shell {
         self.opening_controls(false);
         // Map the candidate so WebKit can finish real layout before committing.
         self.content().set_visible_child_name("candidate");
+        // WebKit can fail without delivering a bridge message. Bound that
+        // wait while retaining the active document and its unsaved notebook.
+        // Parsing and password entry happen before this renderer-only deadline.
+        let weak = Rc::downgrade(self);
+        let timer = glib::timeout_add_local_once(Duration::from_secs(30), move || {
+            if let Some(s) = weak.upgrade()
+                && s.is_open(serial)
+            {
+                if let Some(candidate) = s.opening.candidate.borrow_mut().as_mut() {
+                    candidate.startup_timer.take();
+                }
+                s.open_error("The document took too long to open. Try opening it again.");
+            }
+        });
+        if let Some(candidate) = self.opening.candidate.borrow_mut().as_mut() {
+            candidate.startup_timer = Some(timer);
+        }
     }
 
     fn ready(self: &Rc<Self>, generation: u64, title: &str) {
@@ -544,6 +578,8 @@ impl Shell {
         self.label("document_title").set_text(title);
         self.window.set_title(Some(&format!("{title} — Readero")));
         self.set_reading(true);
+        self.show_notebook();
+        self.notebook_location();
         self.sync_controls();
         self.refresh_sidebar();
         self.watch_markdown();
@@ -569,6 +605,9 @@ impl Shell {
             return;
         }
         match message.event {
+            reflow::Event::Selection { serial, available } => {
+                self.source_selection(serial, available)
+            }
             reflow::Event::Ready {
                 title,
                 toc,
@@ -738,6 +777,7 @@ impl Shell {
         self.save();
         self.dispose_surface();
         self.current.replace(None);
+        self.activate_notebook(None);
         let generation = self.generation();
         if self.focus.get() {
             self.focus.set(false);
@@ -969,6 +1009,8 @@ impl Shell {
         if self.opening.closing.replace(true) {
             return;
         }
+        self.queue_notebook();
+        self.notebook.panel.set_sensitive(false);
         let mut record = self.record_for_save();
         let checkpoint = match self.surface.borrow().as_ref() {
             Some(Surface::Reflow(reader)) if record.is_some() => Some(reader.checkpoint()),
@@ -998,8 +1040,8 @@ impl Shell {
             if let Err(error) = result {
                 shell.storage_error(&error.to_string());
                 let dialog = adw::AlertDialog::builder()
-                    .heading("Your latest position wasn’t saved")
-                    .body("You can keep reading and retry, or close using the last successfully saved position.")
+                    .heading("Your latest changes weren’t saved")
+                    .body("Keep open to preserve your drafts and retry. Closing anyway loses changes since the last successful save, including unsaved notebook text and references.")
                     .build();
                 dialog.add_responses(&[("stay", "Keep open"), ("close", "Close anyway")]);
                 dialog.set_close_response("stay");
@@ -1010,6 +1052,8 @@ impl Shell {
                             s.finish_close();
                         } else {
                             s.opening.closing.set(false);
+                            s.notebook.panel.set_sensitive(true);
+                            s.notebook.editor.set_editable(s.notebook.draft.borrow().is_some());
                             s.opening_controls(true);
                             if let Some(Surface::Reflow(reader)) = s.surface.borrow().as_ref() {
                                 reader.command(serde_json::json!({"type":"snapshot"}));

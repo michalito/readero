@@ -7,6 +7,7 @@ import {
   handlesOwnKeys,
 } from "./interaction.js";
 import { locatorFor, resolveLocator, rangeRect } from "./anchors.js";
+import { Passages } from "./passages.js";
 import { searchBook } from "./search.js";
 
 const nextFrame = () =>
@@ -136,6 +137,7 @@ export async function start(config, nativeSend) {
   }).init();
   if (!book.sections.length)
     throw new Error("This publication has no readable sections.");
+  const passages = new Passages(book, config.revision, send);
   if (book.rendition?.layout === "pre-paginated")
     throw new Error("Fixed-layout EPUBs are not supported in this version.");
   book.transformTarget.addEventListener("load", (event) => {
@@ -179,6 +181,7 @@ export async function start(config, nativeSend) {
     });
   };
   const onDocument = (doc, index) => {
+    passages.attach(doc, index);
     doc.addEventListener("click", (event) => {
       const link = event.target.closest?.("a[href]");
       if (link) {
@@ -216,11 +219,13 @@ export async function start(config, nativeSend) {
         return;
       if (
         settings.mode === "pages" &&
+        (!event.shiftKey || event.key === " ") &&
         ["ArrowRight", "PageDown", "ArrowLeft", "PageUp", " "].includes(
           event.key,
         )
       ) {
         event.preventDefault();
+        passages.clear();
         queue(() =>
           ["ArrowLeft", "PageUp"].includes(event.key) || event.shiftKey
             ? renderer.prev()
@@ -243,6 +248,7 @@ export async function start(config, nativeSend) {
       });
   }
   async function navigate(target, locator = null) {
+    passages.clear();
     stable = false;
     layoutLocator = null;
     await renderer.goTo(target);
@@ -263,6 +269,7 @@ export async function start(config, nativeSend) {
       });
   }
   async function layout(locator = current, changed = false) {
+    passages.clear();
     stable = false;
     layoutLocator = null;
     renderer?.destroy();
@@ -325,8 +332,10 @@ export async function start(config, nativeSend) {
   const command = async (message) => {
     switch (message.type) {
       case "next":
+        passages.clear();
         return queue(() => renderer.next());
       case "previous":
+        passages.clear();
         return queue(() => renderer.prev());
       case "settings":
         settings = message.settings;
@@ -340,6 +349,21 @@ export async function start(config, nativeSend) {
         return queue(() =>
           navigate(resolveLocator(book, message.locator), message.locator),
         );
+      case "passage":
+        return queue(async () => {
+          const target = book.resolveCFI(message.passage.cfi);
+          if (
+            !target ||
+            book.sections[target.index].id !== message.passage.href
+          )
+            failPassage();
+          await navigate(target, message.locator);
+          const doc = renderer
+            .getContents()
+            .find((c) => c.index === target.index)?.doc;
+          if (!doc) failPassage();
+          passages.mark(doc, message.passage);
+        });
       case "href": {
         const target = book.resolveHref(message.href);
         if (target?.index >= 0) return queue(() => navigate(target));
@@ -360,6 +384,7 @@ export async function start(config, nativeSend) {
         send({ type: "escape", handled: inspector.close() });
         break;
       case "dispose":
+        passages.dispose();
         disposed = true;
         stable = false;
         ++searchGeneration;
@@ -371,6 +396,12 @@ export async function start(config, nativeSend) {
   };
   // This global lives only in the named WebKit script world.
   globalThis.readeroCommand = command;
+  const failPassage = () => {
+    throw new Error("This passage needs relinking.");
+  };
+  globalThis.readeroCaptureSelection = (serial) => passages.capture(serial);
+  globalThis.readeroResolvePassage = (passage) =>
+    passages.resolve(passage, renderer.getContents());
   globalThis.readeroCheckpoint = async () => {
     await layoutSerial;
     await renderer.maintenance;
@@ -389,9 +420,15 @@ export async function start(config, nativeSend) {
       if (!content) return false;
       const anchor = target.anchor(content.doc);
       const bounds = content.doc.documentElement.getBoundingClientRect();
-      const rect = typeof anchor === "number"
-        ? new DOMRect(bounds.left, bounds.top + anchor * bounds.height, bounds.width, 1)
-        : rangeRect(anchor);
+      const rect =
+        typeof anchor === "number"
+          ? new DOMRect(
+              bounds.left,
+              bounds.top + anchor * bounds.height,
+              bounds.width,
+              1,
+            )
+          : rangeRect(anchor);
       const frame =
         content.doc.defaultView.frameElement.getBoundingClientRect();
       const viewport = root.getBoundingClientRect();

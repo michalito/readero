@@ -3,6 +3,13 @@ use super::*;
 use serde_json::{Value, json};
 use webkit6::prelude::*;
 
+#[path = "notebook_smoke.rs"]
+mod notebook;
+#[path = "passage_smoke.rs"]
+mod passages;
+#[path = "startup_smoke.rs"]
+mod startup;
+
 async fn settle(ms: u64) {
     glib::timeout_future(Duration::from_millis(ms)).await;
 }
@@ -21,6 +28,7 @@ impl Shell {
         }
         glib::MainContext::default().spawn_local(async move {
             let mut report = json!({"ready": false});
+            let startup = std::env::var_os("READERO_SMOKE_STARTUP").is_some();
             settle(700).await;
             shell.snapshot(&directory.join("01-home.png")).await;
             if let Some(file) = file {
@@ -40,9 +48,15 @@ impl Shell {
                 settle(500).await;
                 let ready = shell.is_ready();
                 report["ready"] = json!(ready);
+                report["display"] = shell.display_observation();
                 report["requested_document_won"] = json!(shell.current.borrow().as_ref()
                     .is_some_and(|record| Some(record.path.clone()) == file.canonicalize().ok()));
                 shell.snapshot(&directory.join("02-reading.png")).await;
+                if startup {
+                    write_json(&directory.join("report.json"), &report);
+                    shell.close();
+                    return;
+                }
                 if std::env::var_os("READERO_SMOKE_UNSAVED").is_some() {
                     shell.turn(true);
                     shell.save();
@@ -55,6 +69,30 @@ impl Shell {
                     return;
                 }
                 if ready {
+                    if std::env::var_os("READERO_SMOKE_STARTUP_RECOVERY").is_some() {
+                        report["startup_recovery"] = shell.check_startup_recovery(&directory).await;
+                        write_json(&directory.join("report.json"), &report);
+                        shell.close();
+                        return;
+                    }
+                    if std::env::var_os("READERO_SMOKE_PASSAGES").is_some() {
+                        report["passages"] = shell.check_passages(&directory, std::env::var_os("READERO_SMOKE_PASSAGES_RESTART").is_some()).await;
+                        write_json(&directory.join("report.json"), &report);
+                        shell.close();
+                        return;
+                    }
+                    if std::env::var_os("READERO_SMOKE_NOTEBOOK_RESTART").is_some() {
+                        report["notebook_restart"] = shell.check_notebook_restart().await;
+                        write_json(&directory.join("report.json"), &report);
+                        shell.close();
+                        return;
+                    }
+                    report["notebook"] = shell.check_notebook(&directory).await;
+                    if std::env::var_os("READERO_SMOKE_NOTEBOOK").is_some() {
+                        write_json(&directory.join("report.json"), &report);
+                        shell.close();
+                        return;
+                    }
                     let action_errors = shell.check_action_errors(&directory).await;
                     report["regressions"] = shell.check_regressions().await;
                     report["regressions"].as_object_mut().expect("regression results")
@@ -580,6 +618,10 @@ impl Shell {
                     "readeroContinuousChecks",
                 ),
                 (include_str!("../../tests/search.js"), "readeroSearchChecks"),
+                (
+                    include_str!("../../tests/passages.js"),
+                    "readeroPassageChecks",
+                ),
             ] {
                 let _ = view
                     .evaluate_javascript_future(script, Some(reflow::WORLD), None)

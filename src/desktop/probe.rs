@@ -14,8 +14,18 @@ impl Shell {
     pub(super) fn probe(self: &Rc<Self>, directory: PathBuf, file: PathBuf, mode: String) {
         let shell = Rc::clone(self);
         glib::MainContext::default().spawn_local(async move {
+            shell.window.set_default_size(1050, 800);
             shell.open(file.clone());
             shell.probe_ready().await;
+            if mode == "notebook" {
+                let report = shell.notebook_performance().await;
+                write(&directory.join("report.json"), &report);
+                shell.close();
+                return;
+            }
+            if mode == "notebook-idle" {
+                shell.prepare_notebook_idle().await;
+            }
             let started = std::env::var("READERO_PROBE_STARTED_NS")
                 .ok()
                 .and_then(|s| s.parse::<u128>().ok());
@@ -27,7 +37,8 @@ impl Shell {
                     .saturating_sub(start) as f64
                     / 1_000_000.0
             });
-            let mut report = json!({"launch_ready_ms": elapsed, "pid":std::process::id()});
+            let mut report = json!({"launch_ready_ms": elapsed, "pid":std::process::id(),
+                "display": shell.display_observation()});
             if mode == "warm" {
                 let mut times = Vec::new();
                 for _ in 0..30 {
@@ -66,7 +77,7 @@ impl Shell {
             if mode == "crash" {
                 pause(120_000).await;
             }
-            if mode == "idle" {
+            if mode == "idle" || mode == "notebook-idle" {
                 pause(4000).await;
                 write(
                     &directory.join("baseline-ready.json"),
@@ -76,6 +87,9 @@ impl Shell {
                 write(&directory.join("activity-started.json"), &json!(true));
                 for step in 0..40 {
                     shell.turn(step < 20);
+                    if mode == "notebook-idle" {
+                        shell.notebook.editor.buffer().insert_at_cursor("Example. ");
+                    }
                     if step % 2 == 0 {
                         shell.change_settings(|settings| {
                             settings.mode = if settings.mode == Mode::Scroll {
@@ -97,6 +111,15 @@ impl Shell {
             }
             shell.close();
         });
+    }
+    pub(super) fn display_observation(&self) -> Value {
+        json!({
+            "backend": gtk::prelude::WidgetExt::display(&self.window).type_().name(),
+            "renderer": self.window.renderer().map(|renderer| renderer.type_().name()),
+            "scale": self.window.surface().map(|surface| surface.scale()),
+            "logical_width": self.window.width(),
+            "logical_height": self.window.height(),
+        })
     }
     async fn probe_ready(&self) {
         let deadline = Instant::now() + Duration::from_secs(30);
