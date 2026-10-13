@@ -9,6 +9,13 @@ struct Resolved {
     recovered: bool,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum ResolveReply {
+    Resolved(Box<Resolved>),
+    Unresolved,
+}
+
 #[derive(Clone)]
 struct CaptureRequest {
     generation: u64,
@@ -372,6 +379,39 @@ impl Shell {
         });
     }
 
+    pub(in crate::desktop::shell) fn reconcile_pending_passages(self: &Rc<Self>) {
+        let n = &self.notebook;
+        let exists = |id: &String| {
+            n.draft
+                .borrow()
+                .as_ref()
+                .is_some_and(|d| d.references.iter().any(|r| &r.id == id))
+        };
+        let stale_connection = n
+            .pending_passage
+            .borrow()
+            .as_ref()
+            .is_some_and(|id| !exists(id));
+        let stale_relink = n
+            .pending_relink
+            .borrow()
+            .as_ref()
+            .is_some_and(|id| !exists(id));
+        if stale_connection {
+            n.pending_passage.take();
+        }
+        if stale_relink {
+            n.pending_relink.take();
+            n.passage_request.set(n.passage_request.get() + 1);
+            n.capture_request.set(n.capture_request.get() + 1);
+            n.capture_pending.set(false);
+        }
+        if stale_connection || stale_relink {
+            self.notebook_location();
+            self.queue_connections();
+        }
+    }
+
     pub(in crate::desktop::shell) fn cancel_pending_connection(self: &Rc<Self>) -> bool {
         let pending = self.notebook.pending_passage.take().is_some();
         let relink = self.notebook.pending_relink.take().is_some();
@@ -389,6 +429,15 @@ impl Shell {
     }
 
     pub(in crate::desktop::shell) fn begin_passage_connection(self: &Rc<Self>, id: &str) {
+        if !self
+            .notebook
+            .draft
+            .borrow()
+            .as_ref()
+            .is_some_and(|d| d.references.iter().any(|r| r.id == id))
+        {
+            return;
+        }
         self.notebook.pending_passage.replace(Some(id.into()));
         self.notebook.editor.grab_focus();
         self.queue_connections();
@@ -610,8 +659,10 @@ impl Shell {
                 });
                 return;
             }
-            Some(Surface::Reflow(reader)) => reader
-                .selection_request::<Resolved>("readeroResolvePassage", serde_json::json!(passage)),
+            Some(Surface::Reflow(reader)) => reader.selection_request::<ResolveReply>(
+                "readeroResolvePassage",
+                serde_json::json!(passage),
+            ),
             None => return,
         };
         let weak = Rc::downgrade(self);
@@ -620,7 +671,7 @@ impl Shell {
             let Some(s) = weak.upgrade() else { return; };
             if !s.passage_request_current(generation, request, &reference) { return; }
             match result {
-                Ok(resolved) if resolved.capture.passage.validate(&resolved.capture.locator).is_ok() => {
+                Ok(ResolveReply::Resolved(resolved)) if resolved.capture.passage.validate(&resolved.capture.locator).is_ok() => {
                     if let Some(current) = s.record_for_save().and_then(|r| r.locator) { s.push_history(current); }
                     if let Some(Surface::Reflow(reader)) = s.surface.borrow().as_ref() {
                         reader.command(serde_json::json!({"type":"passage", "locator":resolved.capture.locator, "passage":resolved.capture.passage}));
@@ -629,7 +680,9 @@ impl Shell {
                     s.sync_controls();
                     if resolved.recovered { s.toast("Passage recovered from its quotation and context"); }
                 }
-                _ => s.passage_needs_relink(reference),
+                Ok(ResolveReply::Unresolved) => s.passage_needs_relink(reference),
+                Ok(ResolveReply::Resolved(_)) => s.action_error("Could not open this passage. Please try again.", &Error::Invalid("The reader returned an invalid passage result.".into())),
+                Err(error) => s.action_error("Could not open this passage. Please try again.", &error),
             }
         });
     }
@@ -660,7 +713,13 @@ impl Shell {
                     s.goto(Destination::Locator(reference.locator.clone()), true);
                     s.toast("Last known location; the saved words are not verified");
                 }
-                if response == "relink" {
+                if response == "relink"
+                    && s.notebook
+                        .draft
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|d| d.references.iter().any(|r| r.id == reference.id))
+                {
                     s.notebook
                         .passage_request
                         .set(s.notebook.passage_request.get() + 1);
@@ -685,6 +744,7 @@ impl Shell {
             .and_then(|d| d.references.iter().find(|r| r.id == id))
             .cloned();
         let Some(previous) = previous else {
+            self.reconcile_pending_passages();
             return;
         };
         let old = previous

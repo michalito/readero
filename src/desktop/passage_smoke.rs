@@ -42,7 +42,7 @@ impl Shell {
         })())"#).await.as_str().unwrap_or_default().to_owned()
     }
 
-    async fn passage_is_highlighted(&self) -> bool {
+    pub(super) async fn passage_is_highlighted(&self) -> bool {
         let pdf = match self.surface.borrow().as_ref() {
             Some(Surface::Pdf(pdf)) => Some(pdf.passage_highlighted()),
             _ => None,
@@ -148,6 +148,13 @@ impl Shell {
             &self.notebook.references,
             &reference.locator.label()
         ));
+        checks.as_object_mut().unwrap().extend(
+            self.check_passage_lifecycle(&reference)
+                .await
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         // Put the original passage outside the visible list viewport. Saving
         // it again must reveal that exact row without disturbing the notes.
         self.notebook_metadata(|d| {

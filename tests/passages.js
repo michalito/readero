@@ -1,6 +1,7 @@
 // Executed by the native smoke driver in WebKit's private world.
 (async () => {
-  const { Passages } = await import("readero://app/passages.js");
+  const { Passages, UnresolvedPassage } =
+    await import("readero://app/passages.js");
   const CFI = await import("readero://app/foliate/epubcfi.js");
   const book = {
     sections: [{ id: "content.xhtml", cfi: "epubcfi(/6/2)" }],
@@ -276,6 +277,39 @@
     checks.invalidated_selection_cannot_be_saved = false;
   } catch {
     checks.invalidated_selection_cannot_be_saved = true;
+  }
+  const operational = new Passages(
+    {
+      ...book,
+      sections: [
+        {
+          ...book.sections[0],
+          createDocument: async () => {
+            throw new Error("temporary chapter load");
+          },
+        },
+      ],
+    },
+    "test",
+    () => {},
+  );
+  try {
+    await operational.resolve(saved.passage, []);
+    checks.chapter_load_error_is_retryable = false;
+  } catch (error) {
+    checks.chapter_load_error_is_retryable =
+      !(error instanceof UnresolvedPassage) &&
+      error.message === "temporary chapter load";
+  }
+  try {
+    await operational.resolve(
+      { ...saved.passage, href: "missing-resource.xhtml" },
+      [],
+    );
+    checks.missing_resource_is_explicit_matching_failure = false;
+  } catch (error) {
+    checks.missing_resource_is_explicit_matching_failure =
+      error instanceof UnresolvedPassage;
   }
   passages.dispose();
   checks.disposed_source_cannot_resolve = await rejects(saved.passage);

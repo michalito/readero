@@ -2,8 +2,9 @@ import * as CFI from "./foliate/epubcfi.js";
 import { locatorFor, textIndex } from "./anchors.js";
 
 const MAX_BYTES = 65536;
+export class UnresolvedPassage extends Error {}
 const fail = () => {
-  throw new Error(
+  throw new UnresolvedPassage(
     "This passage needs relinking. Its words could not be identified confidently.",
   );
 };

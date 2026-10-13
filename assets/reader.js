@@ -7,7 +7,7 @@ import {
   handlesOwnKeys,
 } from "./interaction.js";
 import { locatorFor, resolveLocator, rangeRect } from "./anchors.js";
-import { Passages } from "./passages.js";
+import { Passages, UnresolvedPassage } from "./passages.js";
 import { searchBook } from "./search.js";
 
 const nextFrame = () =>
@@ -408,8 +408,17 @@ export async function start(config, nativeSend) {
     throw new Error("This passage needs relinking.");
   };
   globalThis.readeroCaptureSelection = (serial) => passages.capture(serial);
-  globalThis.readeroResolvePassage = (passage) =>
-    passages.resolve(passage, renderer.getContents());
+  globalThis.readeroResolvePassage = async (passage) => {
+    try {
+      return {
+        status: "resolved",
+        ...(await passages.resolve(passage, renderer.getContents())),
+      };
+    } catch (error) {
+      if (error instanceof UnresolvedPassage) return { status: "unresolved" };
+      throw error;
+    }
+  };
   globalThis.readeroCheckpoint = async () => {
     await layoutSerial;
     await renderer.maintenance;

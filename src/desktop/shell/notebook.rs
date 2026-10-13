@@ -80,6 +80,15 @@ impl Pane {
     }
 
     #[cfg(feature = "smoke")]
+    pub(super) fn passage_mode_probe(&self, id: &str) -> (bool, bool, bool) {
+        (
+            self.pending_passage.borrow().is_some(),
+            self.pending_relink.borrow().is_some(),
+            self.unresolved.borrow().contains(id),
+        )
+    }
+
+    #[cfg(feature = "smoke")]
     pub(super) fn relink_pending(&self) -> bool {
         self.pending_relink.borrow().is_some()
     }

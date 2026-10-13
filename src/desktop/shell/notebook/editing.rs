@@ -310,6 +310,7 @@ impl Shell {
             &buffer.iter_at_offset(selection),
         );
         n.suppress.set(false);
+        self.reconcile_pending_passages();
         self.notebook_changed();
         self.render_references();
         self.queue_connections();
@@ -383,6 +384,7 @@ impl Shell {
             self.toast(&error.to_string());
             return false;
         }
+        self.reconcile_pending_passages();
         self.notebook_changed();
         self.queue_connections();
         self.refresh_notebook_actions();

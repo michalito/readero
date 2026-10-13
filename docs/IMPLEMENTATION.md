@@ -51,8 +51,15 @@ TextBuffer; native deferred clipboard delivery cannot edit the next document or
 a retired buffer. Native GtkText delegates also reject deferred entry edits while
 closing, behind a modal, or after their reference row has been rebuilt.
 
+Pending connection and relink targets are now reconciled after metadata edits
+and Undo/Redo, including both deletion paths. Removing a target retires its
+pending capture; restoring a reference does not resurrect an old mode. Reflow
+matching failures carry an explicit bridge tag. Timeout, transport, malformed
+results and temporary chapter-load failures instead offer retry feedback without
+marking the quotation unresolved or changing its saved content.
+
 The [fresh review evidence](qa/review-validation.json) records 55 core and 57
-desktop Rust tests, 10 installer tests, strict Clippy, 503 native assertions across
+desktop Rust tests, 10 installer tests, strict Clippy, 623 native assertions across
 Markdown/EPUB/PDF passage flows, the notebook flow and mixed-size PDF navigation,
 and 25 AT-SPI assertions.
 All pass in an isolated Ubuntu 26.04 container with synthetic data, private Xvfb,
