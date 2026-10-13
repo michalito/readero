@@ -8,12 +8,29 @@ impl Shell {
         self.connect("sidebar_button", |s| {
             s.sidebar().set_reveal_child(!s.sidebar().reveals_child())
         });
+        let weak = Rc::downgrade(self);
+        self.sidebar().connect_reveal_child_notify(move |sidebar| {
+            if !sidebar.reveals_child()
+                && let Some(s) = weak.upgrade()
+                && gtk::prelude::RootExt::focus(&s.window)
+                    .is_some_and(|focus| focus.is_ancestor(sidebar))
+            {
+                // Return focus from the hidden sidebar to its toggle. Letting
+                // GTK traverse into Papers can move to its first document page.
+                s.button("sidebar_button").grab_focus();
+            }
+        });
         self.connect("search_button", |s| s.show_search());
         self.connect("search_next", |s| s.next_search_result(true));
         self.connect("search_previous", |s| s.next_search_result(false));
         self.connect("bookmark_button", |s| s.bookmark());
         self.connect("next_button", |s| s.turn(true));
         self.connect("previous_button", |s| s.turn(false));
+        for id in ["next_button", "previous_button"] {
+            // Mouse page turns should leave an active notebook editor focused.
+            // The buttons remain reachable by Tab for keyboard navigation.
+            self.button(id).set_focus_on_click(false);
+        }
         self.connect("back_button", |s| s.history(false));
         self.connect("forward_button", |s| s.history(true));
         let scroll: gtk::ToggleButton = self.object("scroll_mode");
@@ -105,6 +122,7 @@ impl Shell {
             "bookmark_button",
             "search_button",
             "sidebar_button",
+            "notebook_button",
         ] {
             self.object::<gtk::Widget>(id).set_visible(reading);
         }
@@ -140,6 +158,7 @@ impl Shell {
         if !self.can_interact() {
             return;
         }
+        self.cancel_passage_navigation();
         let settings = {
             let mut current = self.current.borrow_mut();
             let Some(record) = current.as_mut() else {
@@ -160,7 +179,7 @@ impl Shell {
         self.schedule_save();
     }
 
-    pub(super) fn toggle_focus(&self) {
+    pub(super) fn toggle_focus(self: &Rc<Self>) {
         if !self.can_interact() {
             return;
         }
@@ -170,6 +189,23 @@ impl Shell {
         let focus = !self.focus.get();
         self.focus.set(focus);
         if focus {
+            if !gtk::prelude::RootExt::focus(&self.window)
+                .is_some_and(|widget| widget.is_ancestor(&self.content()))
+            {
+                match self.surface.borrow().as_ref() {
+                    Some(Surface::Pdf(pdf)) => {
+                        // Direct focus keeps the current page; Papers' Tab
+                        // traversal instead starts at the document boundary.
+                        pdf.view
+                            .set_caret_cursor_position(pdf.model.page() as u32, 0);
+                        pdf.view.grab_focus();
+                    }
+                    Some(Surface::Reflow(reader)) => {
+                        reader.view.grab_focus();
+                    }
+                    None => {}
+                }
+            }
             self.sidebar_before_focus
                 .set(self.sidebar().reveals_child());
             self.sidebar().set_reveal_child(false);
@@ -179,9 +215,13 @@ impl Shell {
         }
         self.object::<adw::HeaderBar>("header").set_visible(!focus);
         self.object::<gtk::Box>("footer").set_visible(!focus);
+        self.show_notebook();
+        if focus {
+            self.save();
+        }
     }
 
-    pub(super) fn escape(&self) {
+    pub(super) fn escape(self: &Rc<Self>) {
         if !self.can_interact() {
             return;
         }
@@ -194,7 +234,7 @@ impl Shell {
         }
     }
 
-    pub(super) fn escape_chrome(&self) {
+    pub(super) fn escape_chrome(self: &Rc<Self>) {
         if self.focus.get() {
             self.toggle_focus();
         } else {
@@ -439,6 +479,9 @@ impl Shell {
                 "Ctrl+O    Open a document\nCtrl+F    Find in this document\n",
                 "Ctrl+D    Bookmark this passage\nCtrl+L    Go to a PDF page\n",
                 "Alt+← / →    Back / forward\nF8    Contents and bookmarks\n",
+                "Ctrl+Shift+N    Show / hide notebook\n",
+                "Ctrl+Shift+S    Save selected source passage\n",
+                "F7    Toggle keyboard text selection (Shift+arrows)\n",
                 "F9    Focus on reading\nF11    Fullscreen\n",
                 "Esc    Return to the reading controls\n\n",
                 "In Pages: ← / → or Page Up / Page Down"
@@ -476,8 +519,20 @@ impl Shell {
                 return glib::Propagation::Stop;
             }
             let handled = match key {
+                gdk::Key::s | gdk::Key::S
+                    if ctrl && state.contains(gdk::ModifierType::SHIFT_MASK) =>
+                {
+                    s.save_selected_passage();
+                    true
+                }
                 gdk::Key::o | gdk::Key::O if ctrl => {
                     s.open_dialog(None);
+                    true
+                }
+                gdk::Key::n | gdk::Key::N
+                    if ctrl && state.contains(gdk::ModifierType::SHIFT_MASK) =>
+                {
+                    s.toggle_notebook();
                     true
                 }
                 gdk::Key::f | gdk::Key::F if ctrl => {
@@ -504,6 +559,34 @@ impl Shell {
                     s.history(true);
                     true
                 }
+                gdk::Key::F7 if s.can_interact() => {
+                    match s.surface.borrow().as_ref() {
+                        Some(Surface::Pdf(pdf)) => {
+                            let enabled = !pdf.view.is_caret_navigation_enabled();
+                            pdf.view.set_caret_navigation_enabled(enabled);
+                            s.toast(if enabled {
+                                "Keyboard text selection enabled; Shift+arrows selects text"
+                            } else {
+                                "Keyboard text selection disabled"
+                            });
+                        }
+                        Some(Surface::Reflow(reader)) => {
+                            if let Some(settings) =
+                                webkit6::prelude::WebViewExt::settings(&reader.view)
+                            {
+                                let enabled = !settings.enables_caret_browsing();
+                                settings.set_enable_caret_browsing(enabled);
+                                s.toast(if enabled {
+                                    "Keyboard text selection enabled; Shift+arrows selects text"
+                                } else {
+                                    "Keyboard text selection disabled"
+                                });
+                            }
+                        }
+                        None => {}
+                    }
+                    true
+                }
                 gdk::Key::F8 => {
                     s.sidebar().set_reveal_child(!s.sidebar().reveals_child());
                     true
@@ -517,6 +600,9 @@ impl Shell {
                     true
                 }
                 gdk::Key::Escape => {
+                    if s.cancel_pending_connection() {
+                        return glib::Propagation::Stop;
+                    }
                     s.escape();
                     false
                 }

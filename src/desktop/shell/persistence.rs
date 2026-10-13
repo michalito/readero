@@ -19,6 +19,7 @@ impl Shell {
             }
         };
         self.label("position_label").set_text(label);
+        self.notebook_location();
         if changed {
             self.schedule_save();
         }
@@ -58,6 +59,7 @@ impl Shell {
             timer.remove();
         }
         self.dirty_since.set(None);
+        self.queue_notebook();
         let pending = self.reading_state.save(self.record_for_save());
         let weak = Rc::downgrade(self);
         glib::MainContext::default().spawn_local(async move {
@@ -69,6 +71,7 @@ impl Shell {
     }
 
     pub(super) fn refresh_storage(self: &Rc<Self>) {
+        self.notebook_status();
         let changed = self
             .current
             .borrow_mut()
@@ -88,7 +91,7 @@ impl Shell {
 
     pub(super) fn storage_error(&self, message: &str) {
         let banner: adw::Banner = self.object("save_banner");
-        banner.set_title(&format!("Progress is not being saved. {message}"));
+        banner.set_title(&format!("Changes are not being saved. {message}"));
         banner.set_revealed(true);
     }
 }

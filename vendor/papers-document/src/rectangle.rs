@@ -2,6 +2,14 @@ use crate::Rectangle;
 use std::fmt;
 
 impl Rectangle {
+    pub fn from_coordinates(x1: f64, y1: f64, x2: f64, y2: f64) -> Self {
+        let mut rectangle = Self::new();
+        rectangle.inner.x1 = x1;
+        rectangle.inner.y1 = y1;
+        rectangle.inner.x2 = x2;
+        rectangle.inner.y2 = y2;
+        rectangle
+    }
     #[inline]
     pub fn x1(&self) -> f64 {
         self.inner.x1

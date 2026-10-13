@@ -54,6 +54,24 @@ headerbar {
   background: alpha(@window_fg_color, 0.025);
   border-right: 1px solid alpha(@window_fg_color, 0.075);
 }
+.notebook {
+  padding: 12px;
+  border-left: 1px solid alpha(@window_fg_color, 0.075);
+  background: @window_bg_color;
+}
+.notebook textview {
+  font-size: 14px;
+}
+.notebook .navigation-list row {
+  margin: 2px 0;
+}
+.notebook .navigation-list button {
+  padding: 4px;
+  min-width: 24px;
+}
+.notebook entry {
+  min-width: 0;
+}
 .navigation-list {
   background: transparent;
 }
@@ -127,4 +145,13 @@ headerbar {
 }
 .error-detail {
   font-size: 13px;
+}
+.passage-overlay {
+  color: @accent_bg_color;
+}
+
+.notebook .passage-source {
+  min-width: 18px;
+  min-height: 18px;
+  padding: 1px;
 }

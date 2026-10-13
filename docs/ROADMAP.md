@@ -1,6 +1,6 @@
 # Readero future features
 
-Updated 7 September 2026. Consolidated from the recorded product discussion, the [MVP PRD](MVP_PRD.md), and the [stack decisions](STACK_DECISIONS.md). The working foundation is committed; implementation and qualification evidence live in [IMPLEMENTATION.md](IMPLEMENTATION.md).
+Updated 20 September 2026. Consolidated from the recorded product discussion, the [MVP PRD](MVP_PRD.md), and the [stack decisions](STACK_DECISIONS.md). The working foundation is committed; implementation and qualification evidence live in [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 This is the reference for future feature ideas. **Recorded direction** means an intended capability captured in the discussion or PRD; its detailed specification and delivery order can still change. **Optional** means an idea to evaluate, with no delivery commitment. The sequence below is a proposal, not an approved release schedule.
 
@@ -10,31 +10,31 @@ Readero is a personal Ubuntu reader. Make it comfortable to return to reading, e
 
 Scroll and Pages, saved reading position and appearance, bookmarks, navigation history, focus, and fullscreen already belong to the foundation. Improve them when ordinary reading exposes friction. Both reading modes remain available according to mood and content; focus and fullscreen remain independent choices.
 
-## Recorded future direction
+## Recorded direction and delivery status
 
-### F01 — A notebook beside the document
+### F01 — A notebook beside the document · delivered
 
 **Origin:** the owner's request for a side-panel notepad for notes and examples; PRD §8 and stack decision D10.
 
-Provide a continuous notebook belonging to each document, suitable for questions, worked examples, snippets, and longer thoughts. The reader can keep it open while reading or hide it for an uncluttered view. The existing architecture allows a right sidebar; the final width, resizing behavior, and narrow-window layout need a design pass.
+One continuous plain-text notebook belongs to each document. Native editing includes undo/redo and selection; the resizable panel sits on the right in wide windows and below the reader in narrow ones. Reading navigation and Markdown reloads preserve the live buffer. Hiding, reopening, and restarting restore the saved editing context. Save failures retain drafts, expose Retry, and protect against accidental close or replacement by an unreadable notebook.
 
-The notebook stays at the user's editing position while the document moves. Turning a page must not replace the note being written, move its cursor, or steal keyboard focus. Notes can exist without a location link.
+See the [selected design and scope](NOTEBOOK.md) and [implementation and validation record](IMPLEMENTATION.md). Rich-text editing, multiple notebooks per document, and a workspace system remain unselected.
 
-Before implementation, decide the editing format—plain text or a defined Markdown subset—and the simplest useful structure for a document's notebook. A rich-text editor, multiple notebooks per document, and a workspace system have not been selected.
-
-Proposed acceptance: write an example, navigate and search the document, switch reading modes, hide/reopen the panel, and restart the app. The text, attached references, and intended editing context remain intact. Saving failures are visible and preserve the current draft.
-
-### F02 — Page and passage links in notes
+### F02 — Page and passage links in notes · delivered
 
 **Origin:** the owner's request for notes that track pages and examples; PRD §8.
 
-Show an unobtrusive indicator of the current reading location and provide an action to attach it to a note or example. Following a saved reference returns to the relevant passage, including after switching Scroll/Pages or changing typography. Back returns to the previous reading location.
+A current-location indicator follows the reader. Save current location (originally Attach passage) creates an explicit, named reference in the notebook; several references can identify different examples in the text. References never retarget as reading moves. Following one uses existing navigation and Back history. Names can be edited and references removed without changing notebook text.
 
-Tracking updates the location indicator as the reader moves. It must not silently retarget references already attached to notes. PDF references use document pages/coordinates; reflowable content uses passage identity rather than a temporary screen-page number.
+PDF references use pages and coordinates. EPUB and Markdown references use versioned passage locators that survive layout changes and use the existing approximate-restoration feedback after source changes. F02a adds selected quotations and connections to notebook text.
 
-Before implementation, decide how a reference appears in the editor, whether one note can have several references, and whether attaching a selected quotation is useful in the first version. Selection-to-note is a design question, not an already approved interaction.
+### F02a — Selected passages and notebook connections · delivered
 
-Proposed acceptance: attach a reference while writing an example, move elsewhere, change layout, restart, and follow the reference. The intended passage returns and the note remains stable.
+**Origin:** the owner's 19 September 2026 request to save selected source text and connect saved passages to specific notebook sections, with click-through navigation.
+
+Capture the quotation and full source range, then connect it to selected notebook text. Keep ordinary editing, allow several sources per section and several sections per source, and preserve both ends through edits and restarts. Show uncertainty after source changes instead of silently linking to different words.
+
+The [focused design](PASSAGE_CONNECTIONS.md) defines capture, connections, click behavior, editing/undo, recovery, migration, performance bounds, and acceptance cases. The owner approved explicitly selected text spans as notebook sections. Implementation includes both capture and connections, shared undo, and explicit relinking. The [implementation record](IMPLEMENTATION.md) and [validation evidence](qa/passage-validation.json) distinguish automated coverage from remaining human usability and performance qualification. Persistent highlights remain F03.
 
 ### F03 — Highlights and annotation comments
 
@@ -94,9 +94,9 @@ Syntax coloring is also excluded from MVP and is retained above as an optional t
 
 ## Proposed order
 
-1. Use the foundation for ordinary reading and address concrete friction. Continue the outstanding MVP qualification work recorded in IMPLEMENTATION.md: Orca usability, display scaling, broader document coverage, and controlled performance/long-session measurements.
-2. Specify and build the smallest useful notebook with location links (F01–F02). Prototype the side-panel reading and writing flow before choosing an editor implementation or expanding the data model.
-3. Add highlights and comments (F03), with explicit format coverage and anchor-recovery rules.
+1. Use the foundation for ordinary reading and address concrete friction. Continue the outstanding MVP qualification work recorded in IMPLEMENTATION.md: human Orca usability, broader real-document coverage, and controlled performance/long-session measurements. The notebook now has automated Wayland coverage at 100%, 125%, 150%, and 200% scales.
+2. F01–F02a are delivered, including selected passages and notebook connections. Continue ordinary reading feedback and the qualification work recorded in IMPLEMENTATION.md.
+3. Add highlights and comments (F03), reusing F02a's selected-range identity and recovery rules where appropriate.
 4. Specify export (F04) alongside the note data model so information needed for export is retained. Delivery can move earlier if portability becomes a priority; it need not wait for every annotation format.
 5. Evaluate F05–F09 individually against actual reading needs. Their numbering is an identifier, not a priority ranking.
 

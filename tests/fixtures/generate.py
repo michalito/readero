@@ -66,3 +66,46 @@ with zipfile.ZipFile(root / 'reading.epub') as source, zipfile.ZipFile(root / 's
         target.writestr(item, data)
     target.writestr('cover.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="1600"><rect width="400" height="1600" fill="#40684b"/><circle cx="200" cy="1200" r="100" fill="#f5efdf"/></svg>')
 print('Created standalone SVG cover EPUB fixture')
+
+# EPUB 2 uses NCX navigation and a spine toc attribute, rather than EPUB 3 nav.
+with zipfile.ZipFile(root / 'reading.epub') as source, zipfile.ZipFile(root / 'reading-epub2.epub', 'w') as target:
+    for item in source.infolist():
+        if item.filename == 'nav.xhtml':
+            continue
+        data = source.read(item.filename)
+        if item.filename == 'package.opf':
+            data = data.decode().replace('version="3.0"', 'version="2.0"').replace(
+                '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
+                '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>').replace(
+                '<spine>', '<spine toc="ncx">').encode()
+        target.writestr(item, data)
+    points = ''.join(f'<navPoint id="c{n}" playOrder="{n+1}"><navLabel><text>Chapter {n+1}</text></navLabel><content src="chapter-{n}.xhtml"/></navPoint>' for n in range(12))
+    target.writestr('toc.ncx', f'<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"><head><meta name="dtb:uid" content="readero-fixture"/></head><docTitle><text>The reading practice</text></docTitle><navMap>{points}</navMap></ncx>')
+print('Created EPUB 2 / NCX fixture')
+
+# Keep stress inputs separate from the ordinary eight-page PDF. The scanned
+# fixture contains original raster pages, without a hidden text/OCR layer.
+for name, count, raster in [('large.pdf', 1200, False), ('scanned.pdf', 80, True)]:
+    surface = cairo.PDFSurface(str(root / name), 595, 842)
+    output = cairo.Context(surface)
+    for page in range(count):
+        image = cairo.ImageSurface(cairo.FORMAT_RGB24, 1240, 1754) if raster else None
+        ctx = cairo.Context(image) if image else output
+        if image:
+            ctx.scale(1240 / 595, 1754 / 842)
+        ctx.set_source_rgb(1, 1, 1); ctx.paint()
+        ctx.set_source_rgb(.17, .22, .18); ctx.select_font_face('serif')
+        ctx.set_font_size(24); ctx.move_to(45, 85)
+        ctx.show_text(f'Reading stress fixture / {page + 1}')
+        ctx.set_font_size(12)
+        for line in range(30):
+            ctx.move_to(45, 130 + line * 21)
+            ctx.show_text(f'Passage {page+1}.{line+1}: A quiet page leaves room for reading.')
+        if image:
+            output.save()
+            output.scale(595 / 1240, 842 / 1754)
+            output.set_source_surface(image); output.paint()
+            output.restore()
+        output.show_page()
+    surface.finish()
+print('Created 1,200-page text and 80-page scanned PDF stress fixtures')

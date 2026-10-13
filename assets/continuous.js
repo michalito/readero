@@ -21,9 +21,11 @@ export class Continuous extends EventTarget {
     this.pendingLoads = new Set();
     this.suppress = true;
     this.tick = 0;
+    this.observedScrollTop = 0;
     this.element.addEventListener(
       "scroll",
       () => {
+        this.observeScroll();
         if (this.suppress || this.navigating) return;
         // Update immediately: chapter loads can finish before the next frame.
         this.anchor = this.capture();
@@ -37,6 +39,17 @@ export class Continuous extends EventTarget {
       { passive: true },
     );
     this.resize = new ResizeObserver(() => this.compensate());
+  }
+  observeScroll() {
+    const top = this.element.scrollTop;
+    if (top !== this.observedScrollTop && !this.suppress && !this.navigating)
+      this.dispatchEvent(new Event("manual-scroll"));
+    this.observedScrollTop = top;
+  }
+  scrollTo(top) {
+    this.element.scrollTop = top;
+    // The DOM event arrives later, after synchronous suppression has ended.
+    this.observedScrollTop = this.element.scrollTop;
   }
   capture() {
     const top = this.element.getBoundingClientRect().top + 24;
@@ -65,6 +78,7 @@ export class Continuous extends EventTarget {
     if (!anchor || this.disposed) return;
     const item = this.frames.get(anchor.index);
     if (!item || !anchor.range.startContainer.isConnected) return;
+    this.observeScroll();
     const suppressed = this.suppress;
     this.suppress = true;
     const y =
@@ -73,7 +87,7 @@ export class Continuous extends EventTarget {
     // Scrolling can precede delivery of its DOM event. Account for that motion
     // as well as anchors refreshed by the scroll listener.
     anchor.screenY -= this.element.scrollTop - anchor.scrollTop;
-    this.element.scrollTop += y - anchor.screenY;
+    this.scrollTo(this.element.scrollTop + y - anchor.screenY);
     anchor.scrollTop = this.element.scrollTop;
     this.suppress = suppressed;
   }
@@ -125,6 +139,7 @@ export class Continuous extends EventTarget {
       .sort((a, b) => a.index - b.index)[0];
     this.compensate();
     this.element.insertBefore(iframe, before?.frame ?? null);
+    this.observedScrollTop = this.element.scrollTop;
     const item = { index, frame: iframe, observer: null, css: null };
     this.frames.set(index, item);
     // Insertion itself shifts following chapters, before the iframe loads.
@@ -163,6 +178,7 @@ export class Continuous extends EventTarget {
       );
       if (Math.abs(iframe.getBoundingClientRect().height - measured) > 1)
         iframe.style.height = `${Math.max(1, measured)}px`;
+      this.observedScrollTop = this.element.scrollTop;
       // Browser clamping caused by our resize is not a reader scroll.
       if (this.anchor) this.anchor.scrollTop = this.element.scrollTop;
       this.compensate();
@@ -203,8 +219,7 @@ export class Continuous extends EventTarget {
           : (rangeRect(target)?.top ?? 0);
       // Mount following content before alignment so the bottom of a chapter
       // does not prematurely clamp the restored passage to the viewport edge.
-      this.element.scrollTop =
-        item.frame.offsetTop - this.element.offsetTop + y - 24;
+      this.scrollTo(item.frame.offsetTop - this.element.offsetTop + y - 24);
       await frame();
     } finally {
       this.navigating = false;
@@ -264,11 +279,13 @@ export class Continuous extends EventTarget {
     this.dispatchEvent(new CustomEvent("relocate", { detail: anchor }));
   }
   setStyles(css) {
+    this.observeScroll();
     const anchor = this.capture();
     this.anchor = anchor;
     this.style = css;
     for (const item of this.frames.values())
       if (item.css) item.css.textContent = css;
+    this.observedScrollTop = this.element.scrollTop;
     requestAnimationFrame(() => {
       this.compensate(anchor);
       this.relocate();
@@ -295,9 +312,11 @@ export class Continuous extends EventTarget {
   unmount(index) {
     const item = this.frames.get(index);
     if (!item) return;
+    this.observeScroll();
     item.observer?.disconnect();
     this.resize.unobserve(item.frame);
     item.frame.remove();
+    this.observedScrollTop = this.element.scrollTop;
     this.frames.delete(index);
     this.book.sections[index].unload?.();
   }
