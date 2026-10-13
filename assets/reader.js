@@ -160,6 +160,7 @@ export async function start(config, nativeSend) {
         pending.push({ item: child, depth: depth + 1 });
   }
   const onLocation = ({ detail }) => {
+    if (stable && detail.reason === "snap") passages.clear();
     const locator = locatorFor(
       book,
       detail.index,
@@ -196,6 +197,7 @@ export async function start(config, nativeSend) {
         const target = book.sections[index].resolveHref(href);
         const resolved = book.resolveHref(target);
         if (resolved?.index >= 0) {
+          passages.clear();
           send({ type: "jump", locator: current });
           queue(() => navigate(resolved));
         } else if (
@@ -280,6 +282,7 @@ export async function start(config, nativeSend) {
     root.dataset.mode = settings.mode;
     if (settings.mode === "scroll") {
       renderer = new Continuous(book, readingStyles(settings), onDocument);
+      renderer.addEventListener("manual-scroll", () => passages.clear());
       root.append(renderer.element);
       renderer.addEventListener("reader-error", (event) =>
         send({ type: "error", message: event.detail }),

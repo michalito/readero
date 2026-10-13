@@ -146,7 +146,7 @@ cargo clippy --no-deps --all-targets --features smoke --locked -- -D warnings
 
 Use `scripts/cargo-local` in place of `cargo` with the temporary development prefix. `--no-deps` keeps strict linting focused on authored code; vendored upstream bindings remain unchanged.
 
-The opt-in `smoke` feature drives the **real native application** and captures local screenshots and assertions. It is excluded from the ordinary executable. Python Cairo, Xvfb, and `dbus-run-session` are required for the isolated display route:
+The opt-in `smoke` feature drives the **real native application** and captures local screenshots and assertions. It is excluded from the ordinary executable. Python Cairo, Xvfb, and `dbus-run-session` are required for the isolated display route. The Markdown/EPUB passage flow also needs `python3-xlib` for trusted keyboard activation of an internal link on that private display:
 
 ```sh
 python3 tests/fixtures/generate.py

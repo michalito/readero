@@ -38,8 +38,21 @@ while programmatic restoration preserves them. The notebook shortcut opens the
 notebook when leaving Focus regardless of its prior visibility, and entering Focus
 flushes notebook edits through the existing save/retry path.
 
+The control review also covers continuous scrollbars, paginated touch movement,
+and queued internal links. Manual navigation invalidates stale capture and
+highlight state while renderer-owned compensation/restoration preserves verified
+passages. Capture requests bind their original relink intent and retire correctly
+after failed close. Cancelling the relink dialog returns to ordinary capture.
+Saved PDF passage navigation invalidates any earlier source selection.
+
+Passage-name keyboard and context-menu Undo/Redo now use the shared notebook
+history and preserve name focus. Notebook document switches install a fresh
+TextBuffer; native deferred clipboard delivery cannot edit the next document or
+a retired buffer. Native GtkText delegates also reject deferred entry edits while
+closing, behind a modal, or after their reference row has been rebuilt.
+
 The [fresh review evidence](qa/review-validation.json) records 55 core and 57
-desktop Rust tests, 10 installer tests, strict Clippy, 379 native assertions across
+desktop Rust tests, 10 installer tests, strict Clippy, 503 native assertions across
 Markdown/EPUB/PDF passage flows, the notebook flow and mixed-size PDF navigation,
 and 25 AT-SPI assertions.
 All pass in an isolated Ubuntu 26.04 container with synthetic data, private Xvfb,

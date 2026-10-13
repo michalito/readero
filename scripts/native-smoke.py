@@ -60,8 +60,14 @@ if args.storage_failure:
 command = ['dbus-run-session', '--', str(args.binary.resolve())]
 if args.wayland:
     env['GDK_BACKEND'] = 'wayland'
+    env.pop('READERO_SMOKE_PRIVATE_X11', None)
 else:
-    env.update(GDK_BACKEND='x11', GSK_RENDERER='cairo')
+    env.update(GDK_BACKEND='x11', GSK_RENDERER='cairo', READERO_SMOKE_PRIVATE_X11='1')
+    if args.passages_only and args.file.suffix.lower() != '.pdf':
+        try:
+            import Xlib  # Trusted publication-link key input on private Xvfb.
+        except ImportError:
+            parser.error('The Xvfb passage flow requires python3-xlib.')
     command = ['xvfb-run', '-a', *command]
 def run_application(environment, directory):
     with (directory / 'native.log').open('w') as log:

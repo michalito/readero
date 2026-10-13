@@ -291,6 +291,13 @@ Worked example 1:
             self.notebook.draft.borrow().as_ref().unwrap().references[0].label
                 == "Worked example 1"
         );
+        checks.as_object_mut().unwrap().extend(
+            self.check_reference_controls(&reference.id)
+                .await
+                .as_object()
+                .unwrap()
+                .clone(),
+        );
         let row = self
             .notebook
             .references
@@ -397,6 +404,14 @@ Worked example 1:
                 && buffer.cursor_position() == 51
                 && buffer.iter_at_mark(&buffer.selection_bound()).offset() == 10
         );
+        if checks["notebook_hide_show_keeps_undo_and_selection"] != true {
+            eprintln!(
+                "CONTROL_CONTEXT undo={} cursor={} selection={}",
+                self.notebook.history.borrow().can_undo(),
+                buffer.cursor_position(),
+                buffer.iter_at_mark(&buffer.selection_bound()).offset()
+            );
+        }
         buffer.begin_user_action();
         buffer.insert(&mut buffer.end_iter(), "Focus must flush this edit.");
         buffer.end_user_action();
@@ -474,6 +489,16 @@ Worked example 1:
                 && saved.top > 0
                 && saved.references.len() == 2
         );
+        if checks["notebook_long_text_and_context_saved"] != true {
+            eprintln!(
+                "CONTROL_SAVED text={} cursor={} selection={} top={} refs={}",
+                saved.text == body,
+                saved.cursor,
+                saved.selection,
+                saved.top,
+                saved.references.len()
+            );
+        }
         if let Some(Surface::Pdf(pdf)) = self.surface.borrow().as_ref() {
             checks["notebook_pdf_focus_and_resize_keep_visible_page"] =
                 json!(matches!(pdf.location(),
@@ -592,7 +617,23 @@ Worked example 1:
                 )
                 .ends_with("Retained after a failed save.")
         );
+        let before_close = self.notebook.draft.borrow().clone().unwrap();
+        let (_clipboard, delivery) = self.begin_delayed_body_paste().await;
+        let delayed_capture = matches!(self.surface.borrow().as_ref(), Some(Surface::Reflow(_)));
+        if delayed_capture {
+            self.select_source_fixture().await;
+            settle(100).await;
+            self.delay_capture().await;
+            self.save_selected_passage();
+            settle(100).await;
+            checks["failed_close_fixture_has_pending_capture"] =
+                json!(self.notebook.capture_probe().3);
+        }
         self.close();
+        delivery.send(()).await.unwrap();
+        if delayed_capture {
+            self.release_capture().await;
+        }
         let mut kept_open = false;
         for _ in 0..100 {
             settle(50).await;
@@ -607,6 +648,21 @@ Worked example 1:
                 kept_open = click_button(&dialog, "Keep open");
                 break;
             }
+        }
+        checks["late_clipboard_cannot_modify_closing_notebook"] =
+            json!(self.notebook.draft.borrow().as_ref().unwrap().text == before_close.text);
+        if delayed_capture {
+            settle(150).await;
+            self.select_source_fixture().await;
+            settle(150).await;
+            let (_, available, sensitive, pending) = self.notebook.capture_probe();
+            checks["failed_close_retires_capture_and_recovers_save"] = json!(
+                !pending
+                    && available
+                    && sensitive
+                    && self.notebook.draft.borrow().as_ref().unwrap().references
+                        == before_close.references
+            );
         }
         checks["notebook_failed_close_keeps_editor_and_draft"] = json!(
             kept_open
@@ -786,6 +842,13 @@ Worked example 1:
                 && buffer
                     .text(&buffer.start_iter(), &buffer.end_iter(), true)
                     .ends_with("New input wins.")
+        );
+        checks.as_object_mut().unwrap().extend(
+            self.check_clipboard_sessions(directory)
+                .await
+                .as_object()
+                .unwrap()
+                .clone(),
         );
         // Leave a small, known durable notebook for restart checks and ordinary
         // regression flows, rather than making every later layout use long text.

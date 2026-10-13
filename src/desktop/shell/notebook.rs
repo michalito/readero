@@ -48,12 +48,14 @@ pub(super) struct Pane {
     pending_passage: RefCell<Option<String>>,
     selection_serial: Cell<u64>,
     capture_pending: Cell<bool>,
+    capture_request: Cell<u64>,
     selection_available: Cell<bool>,
     pending_relink: RefCell<Option<String>>,
     unresolved: RefCell<std::collections::HashSet<String>>,
     pub(super) retry: gtk::Button,
     close: gtk::Button,
     pub(super) references: gtk::ListBox,
+    reference_names: RefCell<Vec<(String, gtk::Entry)>>,
     reference_scroll: gtk::ScrolledWindow,
     record: RefCell<Option<DocumentRecord>>,
     pub(super) draft: RefCell<Option<Notebook>>,
@@ -69,6 +71,19 @@ pub(super) struct Pane {
 }
 
 impl Pane {
+    pub(super) fn reference_name(&self, id: &str) -> Option<gtk::Entry> {
+        self.reference_names
+            .borrow()
+            .iter()
+            .find(|(key, _)| key == id)
+            .map(|(_, name)| name.clone())
+    }
+
+    #[cfg(feature = "smoke")]
+    pub(super) fn relink_pending(&self) -> bool {
+        self.pending_relink.borrow().is_some()
+    }
+
     #[cfg(feature = "smoke")]
     pub(super) fn capture_probe(&self) -> (u64, bool, bool, bool) {
         (
@@ -224,12 +239,14 @@ impl Pane {
             pending_passage: RefCell::new(None),
             selection_serial: Cell::new(0),
             capture_pending: Cell::new(false),
+            capture_request: Cell::new(0),
             selection_available: Cell::new(false),
             pending_relink: RefCell::new(None),
             unresolved: RefCell::new(std::collections::HashSet::new()),
             retry,
             close,
             references,
+            reference_names: RefCell::new(Vec::new()),
             reference_scroll: links,
             record: RefCell::new(None),
             draft: RefCell::new(None),
@@ -383,33 +400,6 @@ impl Shell {
             }
         });
         let weak = Rc::downgrade(self);
-        self.notebook.editor.buffer().connect_changed(move |_| {
-            if let Some(s) = weak.upgrade()
-                && !s.notebook.suppress.get()
-            {
-                s.notebook.cancel_restore();
-                s.notebook_changed();
-                s.queue_connections();
-            }
-        });
-        let weak = Rc::downgrade(self);
-        self.notebook
-            .editor
-            .buffer()
-            .connect_mark_set(move |_, _, mark| {
-                if mark
-                    .name()
-                    .is_some_and(|name| name == "insert" || name == "selection_bound")
-                    && let Some(s) = weak.upgrade()
-                    && s.notebook.editor.is_mapped()
-                    && !s.notebook.suppress.get()
-                {
-                    s.notebook.cancel_restore();
-                    s.notebook_changed();
-                    s.queue_connections();
-                }
-            });
-        let weak = Rc::downgrade(self);
         self.notebook
             .scroll
             .vadjustment()
@@ -475,6 +465,19 @@ impl Shell {
         });
     }
 
+    fn replace_notebook_buffer(self: &Rc<Self>) {
+        let n = &self.notebook;
+        let previous = n.editor.buffer();
+        let buffer = gtk::TextBuffer::new(Some(&previous.tag_table()));
+        buffer.set_enable_undo(false);
+        for mark in [&n.scroll_mark, &n.tag_start, &n.tag_end] {
+            previous.delete_mark(mark);
+            buffer.add_mark(mark, &buffer.start_iter());
+        }
+        n.editor.set_buffer(Some(&buffer));
+        self.wire_notebook_buffer();
+    }
+
     pub(super) fn activate_notebook(self: &Rc<Self>, record: Option<DocumentRecord>) {
         if let Some(active) = self.notebook.record.borrow_mut().as_mut() {
             self.reading_state.reconcile(active);
@@ -488,6 +491,9 @@ impl Shell {
             .is_some_and(|(a, b)| a.id == b.id || a.path == b.path);
         self.notebook.selection_available.set(false);
         self.notebook.capture_pending.set(false);
+        self.notebook
+            .capture_request
+            .set(self.notebook.capture_request.get() + 1);
         self.notebook
             .selection_serial
             .set(self.notebook.selection_serial.get() + 1);
@@ -513,7 +519,7 @@ impl Shell {
         n.dirty.set(false);
         n.suppress.set(true);
         n.tags_present.set(false);
-        n.editor.buffer().set_text("");
+        self.replace_notebook_buffer();
         n.editor.set_editable(false);
         n.restore_scroll.set(false);
         n.visibility_intent.set(None);
@@ -816,10 +822,31 @@ impl Shell {
     }
 
     pub(in crate::desktop::shell) fn render_references(self: &Rc<Self>) {
+        let focus = gtk::prelude::RootExt::focus(&self.window);
+        let focused_name = self
+            .notebook
+            .reference_names
+            .borrow()
+            .iter()
+            .find_map(|(id, name)| {
+                focus
+                    .as_ref()
+                    .filter(|focus| {
+                        *focus == name.upcast_ref::<gtk::Widget>() || focus.is_ancestor(name)
+                    })
+                    .map(|_| {
+                        (
+                            id.clone(),
+                            name.selection_bounds()
+                                .unwrap_or((name.position(), name.position())),
+                        )
+                    })
+            });
         let list = &self.notebook.references;
         while let Some(child) = list.first_child() {
             list.remove(&child);
         }
+        self.notebook.reference_names.borrow_mut().clear();
         let references = self
             .notebook
             .draft
@@ -860,10 +887,18 @@ impl Shell {
                 .build();
             name.set_tooltip_text(Some("Reference name — for example, Worked example 1"));
             name.update_property(&[gtk::accessible::Property::Label("Passage reference name")]);
+            self.wire_reference_name(&name);
+            self.notebook
+                .reference_names
+                .borrow_mut()
+                .push((id.clone(), name.clone()));
             let rename_id = id.clone();
+            let serial = self.notebook.serial.get();
             let weak = Rc::downgrade(self);
             name.connect_changed(move |entry| {
-                if let Some(s) = weak.upgrade() {
+                if let Some(s) = weak.upgrade()
+                    && s.reference_name_accepts_input(entry, serial)
+                {
                     s.notebook_metadata(|draft| {
                         if let Some(reference) =
                             draft.references.iter_mut().find(|r| r.id == rename_id)
@@ -903,6 +938,13 @@ impl Shell {
             });
             row.append(&remove);
             list.append(&row);
+        }
+        self.refresh_notebook_actions();
+        if let Some((id, (start, end))) = focused_name
+            && let Some(name) = self.notebook.reference_name(&id)
+        {
+            name.grab_focus();
+            name.select_region(start, end);
         }
     }
 }

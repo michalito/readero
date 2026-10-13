@@ -2,48 +2,7 @@ use super::*;
 
 impl Shell {
     pub(in crate::desktop::shell) fn wire_notebook_editing(self: &Rc<Self>) {
-        let buffer = self.notebook.editor.buffer();
-        let weak = Rc::downgrade(self);
-        buffer.connect_begin_user_action(move |_| {
-            if let Some(s) = weak.upgrade()
-                && !s.notebook.suppress.get()
-            {
-                s.notebook.capture_selection();
-                if let Some(n) = s.notebook.draft.borrow().as_ref() {
-                    s.notebook.history.borrow_mut().begin(n);
-                }
-            }
-        });
-        let weak = Rc::downgrade(self);
-        buffer.connect_end_user_action(move |_| {
-            if let Some(s) = weak.upgrade()
-                && !s.notebook.suppress.get()
-            {
-                s.notebook.capture_selection();
-                if let Some(n) = s.notebook.draft.borrow().as_ref() {
-                    s.notebook.history.borrow_mut().end(n);
-                }
-                s.queue_connections();
-            }
-        });
-        let weak = Rc::downgrade(self);
-        buffer.connect_insert_text(move |buffer, at, text| {
-            if let Some(s) = weak.upgrade()
-                && !s.notebook.suppress.get()
-                && !s.record_notebook_edit(at.offset(), at.offset(), text)
-            {
-                buffer.stop_signal_emission_by_name("insert-text");
-            }
-        });
-        let weak = Rc::downgrade(self);
-        buffer.connect_delete_range(move |buffer, start, end| {
-            if let Some(s) = weak.upgrade()
-                && !s.notebook.suppress.get()
-                && !s.record_notebook_edit(start.offset(), end.offset(), "")
-            {
-                buffer.stop_signal_emission_by_name("delete-range");
-            }
-        });
+        self.wire_notebook_buffer();
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak = Rc::downgrade(self);
@@ -91,6 +50,9 @@ impl Shell {
             self.notebook.actions.add_action(&action);
         }
         self.notebook
+            .panel
+            .insert_action_group("notebook", Some(&self.notebook.actions));
+        self.notebook
             .editor
             .insert_action_group("notebook", Some(&self.notebook.actions));
         let menu = gtk::GestureClick::new();
@@ -137,6 +99,159 @@ impl Shell {
                 }
             });
         }
+    }
+
+    pub(in crate::desktop::shell) fn wire_notebook_buffer(self: &Rc<Self>) {
+        let buffer = self.notebook.editor.buffer();
+        let weak = Rc::downgrade(self);
+        buffer.connect_begin_user_action(move |buffer| {
+            if let Some(s) = weak.upgrade()
+                && s.notebook.editor.buffer() == *buffer
+                && !s.notebook.suppress.get()
+                && s.can_interact()
+                && s.notebook.editor.is_editable()
+            {
+                s.notebook.capture_selection();
+                if let Some(n) = s.notebook.draft.borrow().as_ref() {
+                    s.notebook.history.borrow_mut().begin(n);
+                }
+            }
+        });
+        let weak = Rc::downgrade(self);
+        buffer.connect_end_user_action(move |buffer| {
+            if let Some(s) = weak.upgrade()
+                && s.notebook.editor.buffer() == *buffer
+                && !s.notebook.suppress.get()
+                && s.can_interact()
+                && s.notebook.editor.is_editable()
+            {
+                s.notebook.capture_selection();
+                if let Some(n) = s.notebook.draft.borrow().as_ref() {
+                    s.notebook.history.borrow_mut().end(n);
+                }
+                s.queue_connections();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        buffer.connect_insert_text(move |buffer, at, text| {
+            if let Some(s) = weak.upgrade()
+                && (s.notebook.editor.buffer() != *buffer
+                    || (!s.notebook.suppress.get()
+                        && (!s.notebook_accepts_input()
+                            || !s.record_notebook_edit(at.offset(), at.offset(), text))))
+            {
+                buffer.stop_signal_emission_by_name("insert-text");
+            }
+        });
+        let weak = Rc::downgrade(self);
+        buffer.connect_delete_range(move |buffer, start, end| {
+            if let Some(s) = weak.upgrade()
+                && (s.notebook.editor.buffer() != *buffer
+                    || (!s.notebook.suppress.get()
+                        && (!s.notebook_accepts_input()
+                            || !s.record_notebook_edit(start.offset(), end.offset(), ""))))
+            {
+                buffer.stop_signal_emission_by_name("delete-range");
+            }
+        });
+        let weak = Rc::downgrade(self);
+        buffer.connect_changed(move |buffer| {
+            if let Some(s) = weak.upgrade()
+                && s.notebook.editor.buffer() == *buffer
+                && s.can_interact()
+                && !s.notebook.suppress.get()
+            {
+                s.notebook.cancel_restore();
+                s.notebook_changed();
+                s.queue_connections();
+            }
+        });
+        let weak = Rc::downgrade(self);
+        buffer.connect_mark_set(move |buffer, _, mark| {
+            if mark
+                .name()
+                .is_some_and(|name| name == "insert" || name == "selection_bound")
+                && let Some(s) = weak.upgrade()
+                && s.notebook.editor.is_mapped()
+                && s.notebook.editor.buffer() == *buffer
+                && s.can_interact()
+                && !s.notebook.suppress.get()
+            {
+                s.notebook.cancel_restore();
+                s.notebook_changed();
+                s.queue_connections();
+            }
+        });
+    }
+
+    pub(in crate::desktop::shell) fn notebook_accepts_input(&self) -> bool {
+        self.can_interact()
+            && self.notebook.editor.is_editable()
+            && self.window.visible_dialog().is_none()
+    }
+
+    pub(in crate::desktop::shell) fn wire_reference_name(self: &Rc<Self>, name: &gtk::Entry) {
+        name.set_enable_undo(false);
+        let menu = gio::Menu::new();
+        menu.append(Some("Undo notebook change"), Some("notebook.undo"));
+        menu.append(Some("Redo notebook change"), Some("notebook.redo"));
+        name.set_extra_menu(Some(&menu));
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak = Rc::downgrade(self);
+        keys.connect_key_pressed(move |_, key, _, state| {
+            if state.contains(gdk::ModifierType::CONTROL_MASK)
+                && matches!(key, gdk::Key::z | gdk::Key::Z)
+                && let Some(s) = weak.upgrade()
+            {
+                s.notebook_undo(state.contains(gdk::ModifierType::SHIFT_MASK));
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        name.add_controller(keys);
+        let serial = self.notebook.serial.get();
+        // Native typing and clipboard delivery originate in GtkText. Editable
+        // signals propagate wrapper -> delegate, never delegate -> wrapper.
+        let delegate = name.delegate().expect("GtkEntry editable delegate");
+        let weak_name = name.downgrade();
+        let weak = Rc::downgrade(self);
+        delegate.connect_insert_text(move |editable, _, _| {
+            if let Some(s) = weak.upgrade()
+                && !weak_name
+                    .upgrade()
+                    .is_some_and(|entry| s.reference_name_accepts_input(&entry, serial))
+            {
+                editable.stop_signal_emission_by_name("insert-text");
+            }
+        });
+        let weak_name = name.downgrade();
+        let weak = Rc::downgrade(self);
+        delegate.connect_delete_text(move |editable, _, _| {
+            if let Some(s) = weak.upgrade()
+                && !weak_name
+                    .upgrade()
+                    .is_some_and(|entry| s.reference_name_accepts_input(&entry, serial))
+            {
+                editable.stop_signal_emission_by_name("delete-text");
+            }
+        });
+    }
+
+    pub(in crate::desktop::shell) fn reference_name_accepts_input(
+        &self,
+        entry: &gtk::Entry,
+        serial: u64,
+    ) -> bool {
+        self.notebook.serial.get() == serial
+            && self.notebook_accepts_input()
+            && self
+                .notebook
+                .reference_names
+                .borrow()
+                .iter()
+                .any(|(_, live)| live == entry)
     }
 
     fn record_notebook_edit(&self, start: i32, end: i32, text: &str) -> bool {
@@ -222,7 +337,7 @@ impl Shell {
         popover.popup();
     }
 
-    fn refresh_notebook_actions(&self) {
+    pub(in crate::desktop::shell) fn refresh_notebook_actions(&self) {
         let n = &self.notebook;
         let editable = n.editor.is_editable() && self.can_interact();
         let buffer = n.editor.buffer();
@@ -270,6 +385,7 @@ impl Shell {
         }
         self.notebook_changed();
         self.queue_connections();
+        self.refresh_notebook_actions();
         true
     }
 

@@ -9,6 +9,15 @@ struct Resolved {
     recovered: bool,
 }
 
+#[derive(Clone)]
+struct CaptureRequest {
+    generation: u64,
+    selection: u64,
+    operation: u64,
+    navigation: u64,
+    relink: Option<String>,
+}
+
 impl Shell {
     pub(in crate::desktop::shell) fn wire_passages(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
@@ -216,8 +225,15 @@ impl Shell {
             self.toast("Wait for the notebook to finish loading.");
             return;
         }
-        let generation = self.generation();
-        let serial = self.notebook.selection_serial.get();
+        let operation = self.notebook.capture_request.get() + 1;
+        self.notebook.capture_request.set(operation);
+        let request = CaptureRequest {
+            generation: self.generation(),
+            selection: self.notebook.selection_serial.get(),
+            operation,
+            navigation: self.notebook.passage_request.get(),
+            relink: self.notebook.pending_relink.borrow().clone(),
+        };
         let revision = self
             .current
             .borrow()
@@ -229,9 +245,10 @@ impl Shell {
                 let result = pdf.capture_selection(&revision);
                 glib::MainContext::default().spawn_local({
                     let weak = Rc::downgrade(self);
+                    let request = request.clone();
                     async move {
                         if let Some(s) = weak.upgrade() {
-                            s.finish_capture(generation, serial, result);
+                            s.finish_capture(request, result);
                         }
                     }
                 });
@@ -239,7 +256,7 @@ impl Shell {
             }
             Some(Surface::Reflow(reader)) => Some(reader.selection_request::<Capture>(
                 "readeroCaptureSelection",
-                serde_json::json!(serial),
+                serde_json::json!(request.selection),
             )),
             None => return,
         };
@@ -250,7 +267,7 @@ impl Shell {
             glib::MainContext::default().spawn_local(async move {
                 let result = pending.await;
                 if let Some(s) = weak.upgrade() {
-                    s.finish_capture(generation, serial, result);
+                    s.finish_capture(request, result);
                 }
             });
         }
@@ -258,16 +275,23 @@ impl Shell {
 
     fn finish_capture(
         self: &Rc<Self>,
-        generation: u64,
-        serial: u64,
+        request: CaptureRequest,
         result: readero::document::Result<Capture>,
     ) {
-        if !self.is_current(generation) {
+        if self.notebook.capture_request.get() != request.operation {
             return;
         }
+        // Retire this operation even if a close attempt rejects its result.
+        // Keep open must not leave the capture control permanently disabled.
         self.notebook.capture_pending.set(false);
         self.notebook_location();
-        if self.notebook.selection_serial.get() != serial {
+        if !self.is_current(request.generation)
+            || self.notebook.passage_request.get() != request.navigation
+            || *self.notebook.pending_relink.borrow() != request.relink
+        {
+            return;
+        }
+        if self.notebook.selection_serial.get() != request.selection {
             self.toast("The selection changed. Select the passage again.");
             return;
         }
@@ -278,8 +302,7 @@ impl Shell {
                 return;
             }
         };
-        let pending_relink = self.notebook.pending_relink.borrow().clone();
-        if let Some(id) = pending_relink {
+        if let Some(id) = request.relink {
             self.confirm_relink(id, capture);
             return;
         }
@@ -352,6 +375,11 @@ impl Shell {
     pub(in crate::desktop::shell) fn cancel_pending_connection(self: &Rc<Self>) -> bool {
         let pending = self.notebook.pending_passage.take().is_some();
         let relink = self.notebook.pending_relink.take().is_some();
+        if relink {
+            self.notebook
+                .passage_request
+                .set(self.notebook.passage_request.get() + 1);
+        }
         if pending || relink {
             self.notebook.capture.set_label("Save selected passage");
             self.queue_connections();
@@ -548,6 +576,7 @@ impl Shell {
             self.goto(Destination::Locator(reference.locator), true);
             return;
         };
+        self.cancel_passage_navigation();
         let generation = self.generation();
         let request = self.notebook.passage_request.get() + 1;
         self.notebook.passage_request.set(request);
@@ -633,6 +662,9 @@ impl Shell {
                 }
                 if response == "relink" {
                     s.notebook
+                        .passage_request
+                        .set(s.notebook.passage_request.get() + 1);
+                    s.notebook
                         .pending_relink
                         .replace(Some(reference.id.clone()));
                     s.notebook.capture.set_label("Relink selected passage…");
@@ -675,10 +707,22 @@ impl Shell {
         ]);
         let weak = Rc::downgrade(self);
         let generation = self.generation();
-        dialog.connect_response(Some("relink"), move |_, _| {
+        dialog.set_close_response("cancel");
+        dialog.connect_response(None, move |_, response| {
             if let Some(s) = weak.upgrade()
                 && s.is_current(generation)
             {
+                if s.notebook.pending_relink.borrow().as_deref() != Some(&id) {
+                    return;
+                }
+                s.notebook.pending_relink.take();
+                s.notebook
+                    .passage_request
+                    .set(s.notebook.passage_request.get() + 1);
+                s.notebook_location();
+                if response != "relink" {
+                    return;
+                }
                 if !s.notebook_metadata(|d| {
                     let current = d
                         .references
@@ -696,8 +740,6 @@ impl Shell {
                 }) {
                     return;
                 }
-                s.notebook.pending_relink.take();
-                s.notebook.capture.set_label("Save selected passage");
                 s.notebook.unresolved.borrow_mut().remove(&id);
                 s.render_references();
             }

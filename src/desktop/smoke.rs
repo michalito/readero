@@ -5,6 +5,8 @@ use webkit6::prelude::*;
 
 #[path = "notebook_smoke.rs"]
 mod notebook;
+#[path = "notebook_controls_smoke.rs"]
+mod notebook_controls;
 #[path = "passage_smoke.rs"]
 mod passages;
 #[path = "startup_smoke.rs"]

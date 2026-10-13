@@ -4,7 +4,7 @@ use super::*;
 const NOTES: &str = "My explanation → café 👩‍🔬.\n\nAnother thought.\n";
 
 impl Shell {
-    async fn passage_script(&self, script: &str) -> Value {
+    pub(super) async fn passage_script(&self, script: &str) -> Value {
         let view = match self.surface.borrow().as_ref() {
             Some(Surface::Reflow(reader)) => Some(reader.view.clone()),
             _ => None,
@@ -20,7 +20,7 @@ impl Shell {
         Value::Null
     }
 
-    async fn select_source_fixture(&self) -> String {
+    pub(super) async fn select_source_fixture(&self) -> String {
         let selected = match self.surface.borrow().as_ref() {
             Some(Surface::Pdf(pdf)) => {
                 pdf.view.select_all();
@@ -51,6 +51,32 @@ impl Shell {
             return highlighted;
         }
         self.passage_script("JSON.stringify((document.querySelector('foliate-paginator')?.getContents().map(c => c.doc.defaultView) ?? Array.from(window.frames)).some(f => f.CSS?.highlights?.has('readero-passage')))").await == true
+    }
+
+    pub(super) async fn delay_capture(&self) {
+        self.passage_script(
+            r#"JSON.stringify((() => {
+            const capture = globalThis.readeroCaptureSelection;
+            globalThis.smokeOriginalCapture = capture;
+            globalThis.readeroCaptureSelection = async (...args) => {
+                const result = capture(...args);
+                await new Promise(resolve => globalThis.smokeReleaseCapture = resolve);
+                return result;
+            };
+            return true;
+        })())"#,
+        )
+        .await;
+    }
+
+    pub(super) async fn release_capture(&self) {
+        self.passage_script(
+            r#"JSON.stringify((() => {
+            globalThis.readeroCaptureSelection = globalThis.smokeOriginalCapture;
+            globalThis.smokeReleaseCapture?.(); return true;
+        })())"#,
+        )
+        .await;
     }
 
     pub(super) async fn check_passages(
@@ -320,6 +346,119 @@ impl Shell {
             settle(400).await;
             checks["source_keyboard_navigation_clears_highlight"] =
                 json!(!self.passage_is_highlighted().await);
+            self.follow_saved_passage(&reference.id);
+            settle(700).await;
+            self.select_source_fixture().await;
+            settle(150).await;
+            let serial = self.notebook.capture_probe().0;
+            let before = self.record_for_save().and_then(|r| r.locator);
+            self.passage_script(
+                r#"JSON.stringify((() => {
+                const pages = document.querySelector('foliate-paginator');
+                pages.scrollBy(pages.size * 0.8, pages.size * 0.8);
+                pages.snap(-0.5, -0.5); return true;
+            })())"#,
+            )
+            .await;
+            settle(600).await;
+            let (new_serial, available, sensitive, _) = self.notebook.capture_probe();
+            checks["touch_snap_moves_reader"] =
+                json!(self.record_for_save().and_then(|r| r.locator) != before);
+            checks["touch_snap_invalidates_capture_and_highlight"] = json!(
+                new_serial > serial
+                    && !available
+                    && !sensitive
+                    && !self.passage_is_highlighted().await
+            );
+
+            // Never synthesize input on an existing desktop session. The
+            // wrapper marks only its own private Xvfb runs for this fixture.
+            if std::env::var_os("READERO_SMOKE_PRIVATE_X11").is_some() {
+                self.follow_saved_passage(&reference.id);
+                settle(650).await;
+                if let Some(Surface::Reflow(reader)) = self.surface.borrow().as_ref() {
+                    reader.view.grab_focus();
+                }
+                self.passage_script(r#"JSON.stringify((() => {
+                const pages = document.querySelector('foliate-paginator');
+                const doc = pages.getContents()[0].doc;
+                const link = doc.createElement('a'); link.href = '#smoke-link-target';
+                link.textContent = 'Internal link fixture'; link.id = 'smoke-link-target';
+                doc.body.prepend(link); link.focus();
+                link.addEventListener('click', event => globalThis.smokeTrustedLink = event.isTrusted);
+                const next = pages.next.bind(pages);
+                pages.next = async () => { await new Promise(resolve => globalThis.smokeReleaseLayout = resolve); return next(); };
+                readeroCommand({type:'next'}); return true;
+            })())"#).await;
+                settle(150).await;
+                self.select_source_fixture().await;
+                settle(100).await;
+                let serial = self.notebook.capture_probe().0;
+                self.passage_script("JSON.stringify((document.querySelector('foliate-paginator').getContents()[0].doc.getElementById('smoke-link-target').focus(),true))").await;
+                // XTest targets only the smoke process's disposable Xvfb display.
+                let key = std::process::Command::new("python3").args(["-c", "from Xlib import display, X, XK; from Xlib.ext import xtest; d=display.Display(); w=next(w for w in d.screen().root.query_tree().children if w.get_wm_class() and any('readero' in c.lower() for c in w.get_wm_class())); w.set_input_focus(X.RevertToParent,X.CurrentTime); d.sync(); k=d.keysym_to_keycode(XK.string_to_keysym('Return')); xtest.fake_input(d,X.KeyPress,k); xtest.fake_input(d,X.KeyRelease,k); d.sync()"] ).status().unwrap();
+                settle(150).await;
+                checks["internal_link_fixture_is_trusted"] = json!(
+                    key.success()
+                        && self
+                            .passage_script("JSON.stringify(globalThis.smokeTrustedLink === true)")
+                            .await
+                            == true
+                );
+                checks["queued_internal_link_immediately_invalidates_capture"] = json!(
+                    self.notebook.capture_probe().0 > serial && !self.notebook.capture_probe().1
+                );
+                self.passage_script("JSON.stringify((globalThis.smokeReleaseLayout(),true))")
+                    .await;
+                settle(650).await;
+            }
+            self.change_settings(|settings| settings.mode = Mode::Scroll);
+            settle(650).await;
+            self.follow_saved_passage(&reference.id);
+            settle(700).await;
+            checks["continuous_programmatic_passage_restore_keeps_highlight"] =
+                json!(self.passage_is_highlighted().await);
+            self.select_source_fixture().await;
+            settle(150).await;
+            let serial = self.notebook.capture_probe().0;
+            let moved = self
+                .passage_script(
+                    r#"JSON.stringify((() => {
+                const element = document.querySelector('.continuous');
+                const before = element.scrollTop; element.scrollTop += 240;
+                return element.scrollTop !== before;
+            })())"#,
+                )
+                .await;
+            settle(350).await;
+            let (new_serial, available, sensitive, _) = self.notebook.capture_probe();
+            checks["continuous_scrollbar_fixture_moves"] = moved;
+            checks["continuous_scrollbar_invalidates_selection"] =
+                json!(new_serial > serial && !available && !sensitive);
+            checks["continuous_scrollbar_clears_passage_highlight"] =
+                json!(!self.passage_is_highlighted().await);
+            self.save_selected_passage();
+            checks["continuous_stale_capture_cannot_restart"] =
+                json!(!self.notebook.capture_probe().3);
+            self.select_source_fixture().await;
+            settle(150).await;
+            checks["continuous_fresh_selection_after_scroll_is_available"] =
+                json!(self.notebook.capture_probe().1 && self.notebook.capture_probe().2);
+            checks["continuous_layout_controls_completed"] = json!(false);
+            self.passage_script(include_str!("../../tests/continuous.js"))
+                .await;
+            for _ in 0..300 {
+                let result = self
+                    .passage_script("JSON.stringify(globalThis.readeroContinuousChecks ?? null)")
+                    .await;
+                if let Some(results) = result.as_object() {
+                    checks["continuous_layout_controls_completed"] =
+                        json!(!results.contains_key("error"));
+                    checks.as_object_mut().unwrap().extend(results.clone());
+                    break;
+                }
+                settle(50).await;
+            }
             self.change_settings(|settings| settings.mode = mode);
             settle(500).await;
         }
@@ -335,6 +474,20 @@ impl Shell {
             });
             self.follow_saved_passage(&reference.id);
             settle(800).await;
+            pdf.next();
+            settle(350).await;
+            pdf.view.select_all();
+            settle(100).await;
+            let (serial, available, sensitive, _) = self.notebook.capture_probe();
+            checks["pdf_saved_follow_fixture_has_different_source_selection"] =
+                json!(available && sensitive);
+            self.follow_saved_passage(&reference.id);
+            settle(650).await;
+            let (new_serial, available, sensitive, _) = self.notebook.capture_probe();
+            checks["pdf_saved_follow_invalidates_previous_capture"] =
+                json!(new_serial > serial && !available && !sensitive);
+            checks["pdf_saved_follow_preserves_verified_highlight"] =
+                json!(self.passage_is_highlighted().await);
             let initial_page = pdf.model.page();
             pdf.next();
             let turned_page = pdf.model.page();
@@ -626,7 +779,149 @@ impl Shell {
                 == Some("Replace the saved quotation?")
                 && d.body().contains("Saved:")
                 && d.body().contains("Selected:")));
+        // All confirmation dismissals must leave ordinary capture mode, while
+        // preserving the old quotation and connection until explicit acceptance.
         if let Some(relink) = relink {
+            click_button(&relink, "Cancel");
+        }
+        settle(150).await;
+        let missing_reference =
+            self.notebook.draft.borrow().as_ref().unwrap().references[0].clone();
+        checks["relink_cancel_leaves_normal_capture_mode"] = json!(
+            !self.notebook.relink_pending()
+                && missing_reference
+                    .passage
+                    .as_ref()
+                    .unwrap()
+                    .quote
+                    .starts_with('§')
+        );
+        for dismissal in ["close", "escape_pending"] {
+            self.follow_saved_passage(&reference.id);
+            settle(650).await;
+            if let Some(dialog) = self
+                .window
+                .visible_dialog()
+                .and_downcast::<adw::AlertDialog>()
+            {
+                click_button(&dialog, "Relink to selected text");
+            }
+            settle(150).await;
+            self.select_source_fixture().await;
+            settle(150).await;
+            let delayed = dismissal == "escape_pending"
+                && matches!(self.surface.borrow().as_ref(), Some(Surface::Reflow(_)));
+            if delayed {
+                self.delay_capture().await;
+            }
+            self.save_selected_passage();
+            settle(200).await;
+            if delayed {
+                checks["cancelled_relink_fixture_has_pending_capture"] =
+                    json!(self.notebook.capture_probe().3);
+                self.cancel_pending_connection();
+                self.release_capture().await;
+            } else if let Some(dialog) = self
+                .window
+                .visible_dialog()
+                .and_downcast::<adw::AlertDialog>()
+            {
+                dialog.close();
+            }
+            settle(200).await;
+            checks[format!("relink_{dismissal}_preserves_reference_without_new_capture")] = json!(
+                !self.notebook.relink_pending()
+                    && !self.notebook.capture_probe().3
+                    && self.window.visible_dialog().is_none()
+                    && self.notebook.draft.borrow().as_ref().unwrap().references
+                        == [missing_reference.clone()]
+            );
+        }
+        if matches!(self.surface.borrow().as_ref(), Some(Surface::Reflow(_))) {
+            let mut other = missing_reference.clone();
+            other.id = "other-relink-intent".into();
+            self.notebook_metadata(|d| {
+                d.references.push(other.clone());
+                Ok(())
+            });
+            self.follow_saved_passage(&reference.id);
+            settle(600).await;
+            if let Some(dialog) = self
+                .window
+                .visible_dialog()
+                .and_downcast::<adw::AlertDialog>()
+            {
+                click_button(&dialog, "Relink to selected text");
+            }
+            settle(150).await;
+            self.select_source_fixture().await;
+            settle(150).await;
+            self.delay_capture().await;
+            self.save_selected_passage();
+            settle(150).await;
+            self.follow_saved_passage(&other.id);
+            settle(600).await;
+            if let Some(dialog) = self
+                .window
+                .visible_dialog()
+                .and_downcast::<adw::AlertDialog>()
+            {
+                click_button(&dialog, "Relink to selected text");
+            }
+            settle(150).await;
+            self.release_capture().await;
+            settle(200).await;
+            checks["changed_relink_target_rejects_previous_capture_reply"] = json!(
+                self.window.visible_dialog().is_none()
+                    && !self.notebook.capture_probe().3
+                    && self.notebook.relink_pending()
+                    && self.notebook.draft.borrow().as_ref().unwrap().references
+                        == [missing_reference.clone(), other.clone()]
+            );
+            self.cancel_pending_connection();
+            self.notebook_metadata(|d| {
+                d.references.retain(|r| r.id != other.id);
+                Ok(())
+            });
+        }
+        self.select_source_fixture().await;
+        settle(150).await;
+        self.save_selected_passage();
+        settle(350).await;
+        checks["ordinary_capture_after_cancel_adds_without_relinking"] = json!(
+            self.window.visible_dialog().is_none()
+                && self
+                    .notebook
+                    .draft
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .references
+                    .len()
+                    == 2
+                && self.notebook.draft.borrow().as_ref().unwrap().references[0]
+                    == missing_reference
+        );
+        self.notebook_undo(false);
+        self.follow_saved_passage(&reference.id);
+        settle(650).await;
+        if let Some(dialog) = self
+            .window
+            .visible_dialog()
+            .and_downcast::<adw::AlertDialog>()
+        {
+            click_button(&dialog, "Relink to selected text");
+        }
+        settle(150).await;
+        self.select_source_fixture().await;
+        settle(150).await;
+        self.save_selected_passage();
+        settle(300).await;
+        if let Some(relink) = self
+            .window
+            .visible_dialog()
+            .and_downcast::<adw::AlertDialog>()
+        {
             click_button(&relink, "Replace passage with this selection");
         }
         settle(200).await;
