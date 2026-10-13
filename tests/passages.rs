@@ -1,7 +1,7 @@
 use readero::{
     document::{Anchor, Locator},
     notebook::{History, Notebook, Reference},
-    passage::{Passage, Target, unique_match},
+    passage::{Passage, PdfFragment, Target, unique_match},
 };
 
 fn point() -> Locator {
@@ -208,6 +208,44 @@ fn selection_validation_keeps_dom_utf16_distinct_from_notebook_characters() {
     }
     assert!(p.validate(&locator).is_err());
     assert!(p.validate(&point()).is_err());
+}
+
+#[test]
+fn pdf_quote_validation_covers_fragments_in_order_with_page_separators() {
+    let fragment = |page, quote: &str| PdfFragment {
+        page,
+        points: [10.0, 20.0, 80.0, 30.0],
+        style: 0,
+        quote: quote.into(),
+        prefix: String::new(),
+        suffix: String::new(),
+    };
+    let mut p = Passage {
+        quote: "First café.\n\u{c}Second 🦉.\n".into(),
+        revision: "r1".into(),
+        target: Target::Pdf {
+            fragments: vec![fragment(0, "First café."), fragment(1, "Second 🦉.")],
+        },
+    };
+    p.validate(&point()).unwrap();
+    for invalid in [
+        "Unrelated displayed quotation.",
+        "Second 🦉. First café.",
+        "First café.",
+        "First café. unverified Second 🦉.",
+        "Unverified First café. Second 🦉.",
+        "First café. Second 🦉. Unverified",
+    ] {
+        p.quote = invalid.into();
+        assert!(p.validate(&point()).is_err(), "accepted {invalid:?}");
+    }
+    p.target = Target::Pdf {
+        fragments: vec![fragment(0, "aa"), fragment(1, "aa")],
+    };
+    p.quote = "aaa".into();
+    assert!(p.validate(&point()).is_err(), "overlapping fragments");
+    p.quote = "aa\n\naa".into();
+    p.validate(&point()).unwrap();
 }
 
 #[test]

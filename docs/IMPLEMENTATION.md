@@ -18,8 +18,15 @@ invalidate capture and pending navigation before their normal handler runs.
 Eight focused native checks cover keyboard movement, stale capture rejection,
 highlight clearing, and preserved programmatic passage restoration.
 
-The [fresh review evidence](qa/review-validation.json) records 52 core and 52
-desktop Rust tests, 10 installer tests, strict Clippy, 249 native assertions across
+Hosted review follow-up clears stale capture/highlight state when the user
+deselects or selects whitespace in another reflow chapter, while preserving a
+newer selection when a background chapter reports delayed deselection. Saved PDF
+quotations are validated against their ordered page fragments, permitting only
+whitespace between them. The original notebook design now labels its location-only
+description as historical and identifies F02a as delivered.
+
+The [fresh review evidence](qa/review-validation.json) records 53 core and 53
+desktop Rust tests, 10 installer tests, strict Clippy, 261 native assertions across
 Markdown/EPUB/PDF passage flows and the notebook flow, and 25 AT-SPI assertions.
 All pass in an isolated Ubuntu 26.04 container with synthetic data, private Xvfb,
 and private D-Bus sessions. The host disallows WebKit's user-namespace sandbox,

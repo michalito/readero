@@ -29,8 +29,10 @@
   let selected = availabilityDoc.createRange();
   const listeners = {};
   const availability = [];
+  let focusedChapter = 0;
   const source = {
     body: availabilityDoc.body,
+    hasFocus: () => focusedChapter === 0,
     addEventListener: (event, callback) => (listeners[event] = callback),
     getSelection: () => ({
       rangeCount: 1,
@@ -64,6 +66,72 @@
   selected.collapse(true);
   listeners.selectionchange();
   checks.collapsed_selection_disables_action = availability.at(-1) === false;
+  const otherDoc = documentFor("<p>other   </p>");
+  const otherRange = otherDoc.createRange();
+  const otherListeners = {};
+  const otherSource = {
+    body: otherDoc.body,
+    hasFocus: () => focusedChapter === 1,
+    addEventListener: (event, callback) => (otherListeners[event] = callback),
+    getSelection: () => ({
+      rangeCount: 1,
+      isCollapsed: otherRange.collapsed,
+      getRangeAt: () => otherRange,
+    }),
+  };
+  selectionState.attach(otherSource, 1);
+  const selectFirstChapter = () => {
+    focusedChapter = 0;
+    selected.setStart(words, 0);
+    selected.setEnd(words, 5);
+    listeners.selectionchange();
+  };
+  selectFirstChapter();
+  otherRange.setStart(otherDoc.querySelector("p").firstChild, 5);
+  otherRange.setEnd(otherDoc.querySelector("p").firstChild, 8);
+  focusedChapter = 1;
+  otherListeners.selectionchange();
+  checks.other_chapter_whitespace_invalidates_previous_capture =
+    availability.at(-1) === false && selectionState.selection === null;
+  selectFirstChapter();
+  otherRange.collapse(true);
+  focusedChapter = 1;
+  otherListeners.selectionchange();
+  checks.other_chapter_click_invalidates_previous_capture =
+    availability.at(-1) === false && selectionState.selection === null;
+  otherRange.setStart(otherDoc.querySelector("p").firstChild, 0);
+  otherRange.setEnd(otherDoc.querySelector("p").firstChild, 5);
+  otherListeners.selectionchange();
+  const currentSerial = selectionState.serial;
+  selected.collapse(true);
+  listeners.selectionchange();
+  checks.background_deselection_keeps_newer_chapter_selection =
+    selectionState.selection?.doc === otherSource &&
+    selectionState.serial === currentSerial;
+  selectionState.selection = null;
+  const backgroundHighlights = new Map([["readero-passage", {}]]);
+  selectionState.marked.add({
+    defaultView: { CSS: { highlights: backgroundHighlights } },
+  });
+  listeners.selectionchange();
+  checks.background_deselection_keeps_passage_highlight =
+    backgroundHighlights.has("readero-passage");
+  selectFirstChapter();
+  const highlights = new Map([["readero-passage", {}]]);
+  selectionState.marked.add({ defaultView: { CSS: { highlights } } });
+  selected.collapse(true);
+  listeners.selectionchange();
+  checks.user_deselection_clears_temporary_highlight =
+    !highlights.has("readero-passage") && selectionState.marked.size === 0;
+  selectFirstChapter();
+  const fallback = { doc: source, range: selected.cloneRange() };
+  selectionState.fallback = fallback;
+  const fallbackSerial = selectionState.serial;
+  listeners.selectionchange();
+  checks.fallback_mark_selection_event_is_ignored =
+    selectionState.fallback === fallback &&
+    selectionState.serial === fallbackSerial;
+  selectionState.fallback = null;
   const doc = documentFor(
     "<p>Before.</p><p>A café <em>👩‍🔬 é</em> מחשבה.</p><p>After.</p>",
   );

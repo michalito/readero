@@ -2,10 +2,11 @@
 
 Selected 18 September 2026 from the first undeveloped roadmap item.
 
-This document describes the delivered F01–F02 implementation. The next selected
-addition, quotation capture and connections to notebook sections, is specified
-in the approved [Selected passages and notebook connections](PASSAGE_CONNECTIONS.md) extension. The original F01/F02 decisions below describe the earlier location-only behavior; F02a adds quotations, connected ranges, shared undo and schema v3.
-That proposal is not part of the installed build yet.
+This document records the original F01–F02 location-only notebook design.
+Quotation capture and connections to notebook sections are now delivered as
+F02a, specified in [Selected passages and notebook connections](PASSAGE_CONNECTIONS.md).
+The original decisions below are historical where that extension adds or replaces
+behavior: quotations, connected ranges, shared undo, and schema v3.
 
 ## Reading and writing
 

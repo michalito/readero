@@ -73,6 +73,7 @@ impl Passage {
                                 && context_ok(&f.suffix)
                         })
                         && fragments.iter().map(|f| f.quote.len()).sum::<usize>() <= MAX_QUOTE_BYTES
+                        && pdf_quote_matches_fragments(&self.quote, fragments)
                 }
                 (
                     Target::Reflow {
@@ -116,6 +117,22 @@ impl Passage {
             .take(70)
             .collect()
     }
+}
+
+fn pdf_quote_matches_fragments(quote: &str, fragments: &[PdfFragment]) -> bool {
+    let mut remaining = quote;
+    for fragment in fragments {
+        let Some(start) = remaining.find(&fragment.quote) else {
+            return false;
+        };
+        // Papers inserts whitespace between selected pages. Everything else
+        // shown as the saved quotation must be verified by a page fragment.
+        if !remaining[..start].trim().is_empty() {
+            return false;
+        }
+        remaining = &remaining[start + fragment.quote.len()..];
+    }
+    remaining.trim().is_empty()
 }
 
 /// Exact, contextual matching only. Repeated quotations without enough context

@@ -158,10 +158,12 @@ export class Passages {
         hasSelectedText(range)
       ) {
         this.selection = { doc, index, range };
-        this.clearMark();
-      } else if (!this.selection || this.selection.doc === doc)
+      } else if (range || this.selection?.doc === doc || doc.hasFocus())
         this.selection = null;
+      // A background chapter's delayed deselection must not clear a newer
+      // selection in the focused chapter. User interaction there does clear it.
       else return;
+      this.clearMark();
       this.send({
         type: "selection",
         serial: ++this.serial,

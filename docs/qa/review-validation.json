@@ -13,8 +13,8 @@
     "data": "synthetic fixtures and fresh databases; no user documents or desktop session"
   },
   "rust_tests": {
-    "core_only_passed": 52,
-    "desktop_passed": 52
+    "core_only_passed": 53,
+    "desktop_passed": 53
   },
   "installer_tests_passed": 10,
   "static_checks": {
@@ -27,7 +27,7 @@
   },
   "native": {
     "passages-markdown-final": {
-      "assertions": 68,
+      "assertions": 74,
       "passed": true,
       "checks": {
         "ready": true,
@@ -36,6 +36,8 @@
         "passage_checks_completed": true,
         "ambiguous_quote_is_never_guessed": true,
         "back_restores_prior_reading_position": true,
+        "background_deselection_keeps_newer_chapter_selection": true,
+        "background_deselection_keeps_passage_highlight": true,
         "blank_capture_rejected": true,
         "capture_keeps_notebook_text": true,
         "changed_context_is_not_claimed_verified": true,
@@ -55,6 +57,7 @@
         "duplicate_capture_selects_existing_passage": true,
         "duplicate_fixture_starts_offscreen": true,
         "explicit_relink_preserves_identity_and_connections": true,
+        "fallback_mark_selection_event_is_ignored": true,
         "identical_selection_deduplicated": true,
         "insertion_before_moves_section": true,
         "invalidated_selection_cannot_be_saved": true,
@@ -68,6 +71,8 @@
         "new_navigation_cancels_pending_passage": true,
         "notes_first_opens_passage_picker": true,
         "one_section_accepts_multiple_passages": true,
+        "other_chapter_click_invalidates_previous_capture": true,
+        "other_chapter_whitespace_invalidates_previous_capture": true,
         "overlapping_quote_candidates_are_ambiguous": true,
         "oversized_capture_rejected_without_truncation": true,
         "passage_and_section_durable": true,
@@ -92,6 +97,7 @@
         "undo_restores_connection": true,
         "undo_restores_deleted_section": true,
         "unique_context_recovers_reformatted_range": true,
+        "user_deselection_clears_temporary_highlight": true,
         "whitespace_has_no_capturable_snapshot": true,
         "whitespace_replaces_available_selection": true,
         "restart_checks_completed": true,
@@ -101,7 +107,7 @@
       }
     },
     "passages-epub-final": {
-      "assertions": 68,
+      "assertions": 74,
       "passed": true,
       "checks": {
         "ready": true,
@@ -110,6 +116,8 @@
         "passage_checks_completed": true,
         "ambiguous_quote_is_never_guessed": true,
         "back_restores_prior_reading_position": true,
+        "background_deselection_keeps_newer_chapter_selection": true,
+        "background_deselection_keeps_passage_highlight": true,
         "blank_capture_rejected": true,
         "capture_keeps_notebook_text": true,
         "changed_context_is_not_claimed_verified": true,
@@ -129,6 +137,7 @@
         "duplicate_capture_selects_existing_passage": true,
         "duplicate_fixture_starts_offscreen": true,
         "explicit_relink_preserves_identity_and_connections": true,
+        "fallback_mark_selection_event_is_ignored": true,
         "identical_selection_deduplicated": true,
         "insertion_before_moves_section": true,
         "invalidated_selection_cannot_be_saved": true,
@@ -142,6 +151,8 @@
         "new_navigation_cancels_pending_passage": true,
         "notes_first_opens_passage_picker": true,
         "one_section_accepts_multiple_passages": true,
+        "other_chapter_click_invalidates_previous_capture": true,
+        "other_chapter_whitespace_invalidates_previous_capture": true,
         "overlapping_quote_candidates_are_ambiguous": true,
         "oversized_capture_rejected_without_truncation": true,
         "passage_and_section_durable": true,
@@ -166,6 +177,7 @@
         "undo_restores_connection": true,
         "undo_restores_deleted_section": true,
         "unique_context_recovers_reformatted_range": true,
+        "user_deselection_clears_temporary_highlight": true,
         "whitespace_has_no_capturable_snapshot": true,
         "whitespace_replaces_available_selection": true,
         "restart_checks_completed": true,
@@ -332,7 +344,7 @@
     }
   },
   "provenance": [
-    "Native flows use the debug smoke build. A subsequent rebuild only reformatted JavaScript; the tested behavior is unchanged.",
+    "Native flows use debug smoke builds. Reflow, PDF and AT-SPI flows were rerun for hosted-review corrections; the unchanged notebook flow retains its previous passing run.",
     "The first reflow run exposed a test setup issue: selecting source text can replace the GTK editor primary selection on X11. The regression compares notebook state immediately before and after capture. All final checks pass.",
     "Earlier September evidence remains historical; this record does not assert those measurements were rerun."
   ],
@@ -346,5 +358,10 @@
     "regression": "Five intended assertions failed before connecting the native scroll action; all 62 PDF passage assertions pass after the fix. The fixture movement check accepts movement within a tall page as well as page-number changes.",
     "assertions_added": 8,
     "behavior": "Keyboard navigation clears the source selection token, Save availability, temporary quotation highlight, and pending passage navigation while programmatic passage restoration keeps its highlight."
+  },
+  "hosted_review_followup": {
+    "documentation": "The original F01/F02 description is explicitly historical, and F02a is marked delivered.",
+    "selection": "Focused-chapter deselection and whitespace invalidate capture and temporary marks; delayed deselection from an inactive chapter preserves a newer capture or highlight. Six WebKit adapter assertions cover these cases and the fallback-selection exemption.",
+    "pdf_quotation": "Full saved quotations must consist of the ordered per-page fragment text plus whitespace separators. A Rust regression covers Unicode, repeated fragments, normal separators, mismatches, reordering, uncovered text and overlap."
   }
 }
