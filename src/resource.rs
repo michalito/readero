@@ -35,10 +35,15 @@ pub fn resource_path(raw: &str) -> Result<PathBuf> {
     let decoded = percent_encoding::percent_decode_str(raw)
         .decode_utf8()
         .map_err(|_| Error::Invalid("Invalid resource name.".into()))?;
-    if decoded.is_empty() || decoded.len() > 4096 || decoded.contains(['\\', '\0']) {
+    validate_resource_path(&decoded).map(Path::to_path_buf)
+}
+
+/// ZIP entry names are literal paths; only incoming resource URLs are decoded.
+fn validate_resource_path(name: &str) -> Result<&Path> {
+    if name.is_empty() || name.len() > 4096 || name.contains(['\\', '\0']) {
         return Err(Error::Invalid("Invalid resource name.".into()));
     }
-    let path = Path::new(decoded.as_ref());
+    let path = Path::new(name);
     if path
         .components()
         .any(|c| !matches!(c, Component::Normal(_)))
@@ -47,7 +52,7 @@ pub fn resource_path(raw: &str) -> Result<PathBuf> {
             "This resource is outside the document.".into(),
         ));
     }
-    Ok(path.into())
+    Ok(path)
 }
 
 pub fn revision(path: &Path) -> Result<String> {
@@ -91,7 +96,7 @@ impl Publication {
                     if entry.is_dir() {
                         continue;
                     }
-                    resource_path(entry.name())?;
+                    validate_resource_path(entry.name())?;
                     if entry.size() > MAX_ENTRY
                         || entry.size() / entry.compressed_size().max(1) > 2000
                     {
