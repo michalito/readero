@@ -2,18 +2,66 @@ use readero::{document::*, resource::Publication, state::Store};
 use std::io::Write;
 
 #[test]
+fn epub_literal_percent_filenames_open_and_read_without_double_decoding() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("literal-percent.epub");
+    let resources = [
+        ("Text/100%FF.xhtml", "Text/100%25FF.xhtml"),
+        ("Text/literal%00.xhtml", "Text/literal%2500.xhtml"),
+        ("%2e%2e/chapter.xhtml", "%252e%252e/chapter.xhtml"),
+        ("Text/with%20space.xhtml", "Text/with%2520space.xhtml"),
+        ("Text/with space.xhtml", "Text/with%20space.xhtml"),
+        ("Text/café.xhtml", "Text/caf%C3%A9.xhtml"),
+    ];
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    zip.start_file(
+        "META-INF/container.xml",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(b"<container/>").unwrap();
+    for (name, _) in resources {
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(name.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap();
+
+    let mut publication = Publication::open(&path, Format::Epub).unwrap();
+    for (name, request) in resources {
+        assert!(publication.entries.iter().any(|entry| entry.name == name));
+        assert_eq!(publication.read(request).unwrap(), name.as_bytes());
+    }
+    for request in [
+        "../outside.txt",
+        "%2e%2e/chapter.xhtml",
+        "Text/literal%00.xhtml",
+    ] {
+        assert!(publication.read(request).is_err(), "{request}");
+    }
+}
+
+#[test]
 fn malformed_and_escaping_archives_fail_without_extracting_files() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("bad.epub");
     std::fs::write(&path, b"not a zip file").unwrap();
     assert!(Publication::open(&path, Format::Epub).is_err());
-    let file = std::fs::File::create(&path).unwrap();
-    let mut zip = zip::ZipWriter::new(file);
-    zip.start_file("../outside.txt", zip::write::SimpleFileOptions::default())
+    for name in ["../outside.txt", "/outside.txt", "Text\\outside.txt"] {
+        let file = std::fs::File::create(&path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        zip.start_file(
+            "META-INF/container.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
         .unwrap();
-    zip.write_all(b"untrusted").unwrap();
-    zip.finish().unwrap();
-    assert!(Publication::open(&path, Format::Epub).is_err());
+        zip.write_all(b"<container/>").unwrap();
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"untrusted").unwrap();
+        zip.finish().unwrap();
+        assert!(Publication::open(&path, Format::Epub).is_err(), "{name}");
+    }
     assert!(!temp.path().parent().unwrap().join("outside.txt").exists());
 }
 
