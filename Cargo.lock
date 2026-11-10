@@ -1082,6 +1082,7 @@ dependencies = [
  "async-channel",
  "gtk4",
  "libadwaita",
+ "libc",
  "papers-document",
  "papers-view",
  "percent-encoding",

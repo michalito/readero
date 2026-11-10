@@ -51,6 +51,7 @@ webkit6 = { version = "=0.5.0", features = ["v2_42"], optional = true }
 papers-view = { workspace = true, features = ["v49"], optional = true }
 papers-document = { workspace = true, optional = true }
 async-channel = "2.5"
+libc = "0.2"
 pulldown-cmark = "=0.13.4"
 rusqlite = "=0.40.2"
 serde = { version = "1", features = ["derive"] }

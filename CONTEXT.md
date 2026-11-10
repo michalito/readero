@@ -22,6 +22,7 @@ A named reference to a passage that the reader explicitly saves. Removing a docu
 
 **Locate**:
 The action that reconnects a known document to its moved source file while preserving its reading state.
+If the reader already opened the moved file as a separate document, Locate merges that duplicate when it holds no bookmarks or notebook content.
 
 **Notebook**:
 The continuous text the reader writes for one document, together with its saved passages and connections.
