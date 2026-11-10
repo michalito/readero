@@ -1,6 +1,7 @@
 use readero::{
     document::{Anchor, Bookmark, DocumentRecord, Locator},
     reading_state::ReadingState,
+    state::Repair,
 };
 use rusqlite::Connection;
 use std::path::PathBuf;
@@ -518,4 +519,403 @@ fn cancelled_open_does_not_enter_recents_and_failed_bookmark_is_not_retried() {
         reading.persisted(reading.record.path.clone()).locator,
         reading.record.locator
     );
+}
+
+#[test]
+fn bookmarks_keep_their_creation_order_within_the_same_second() {
+    let mut reading = Reading::new();
+    passage(&mut reading.record, 1);
+    for id in ["zeta", "alpha", "mu"] {
+        reading
+            .state
+            .bookmark(reading.record.clone(), bookmark(&reading.record, id))
+            .wait()
+            .unwrap();
+    }
+    // Creation times have one-second resolution. Make them equal explicitly.
+    Connection::open(&reading.database)
+        .unwrap()
+        .execute("UPDATE bookmarks SET created_at=0", [])
+        .unwrap();
+    let ids: Vec<_> = reading
+        .state
+        .bookmarks(reading.record.id.clone())
+        .wait()
+        .unwrap()
+        .into_iter()
+        .map(|bookmark| bookmark.id)
+        .collect();
+    assert_eq!(ids, ["zeta", "alpha", "mu"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_locked_open_through_a_symlink_reconnects_to_the_same_document() {
+    let mut reading = Reading::new();
+    passage(&mut reading.record, 1);
+    reading
+        .state
+        .bookmark(
+            reading.record.clone(),
+            bookmark(&reading.record, "original"),
+        )
+        .wait()
+        .unwrap();
+    let alias = reading.dir.path().join("alias");
+    std::os::unix::fs::symlink(reading.record.path.parent().unwrap(), &alias).unwrap();
+    let lock = Connection::open(&reading.database).unwrap();
+    lock.execute_batch("BEGIN EXCLUSIVE").unwrap();
+    let opened = reading
+        .state
+        .document(alias.join("reading.md"))
+        .wait()
+        .unwrap();
+    assert!(opened.storage_error.is_some());
+    let mut provisional = opened.record;
+    assert_eq!(provisional.path, reading.record.path);
+    lock.execute_batch("ROLLBACK").unwrap();
+    passage(&mut provisional, 2);
+    reading
+        .state
+        .save(Some(provisional.clone()))
+        .wait()
+        .unwrap();
+    assert_eq!(reading.state.recents().wait().unwrap().len(), 1);
+    assert!(reading.state.reconcile(&mut provisional));
+    assert_eq!(provisional.id, reading.record.id);
+    assert_eq!(
+        reading.persisted(reading.record.path.clone()).locator,
+        provisional.locator
+    );
+}
+
+#[test]
+fn a_retained_provisional_session_follows_locate_even_when_the_old_path_is_reused() {
+    for reuse in [false, true] {
+        let mut reading = Reading::new();
+        passage(&mut reading.record, 1);
+        reading
+            .state
+            .bookmark(
+                reading.record.clone(),
+                bookmark(&reading.record, "original"),
+            )
+            .wait()
+            .unwrap();
+        let old_path = reading.record.path.clone();
+        let mut provisional = DocumentRecord::new(old_path.clone()).unwrap();
+        passage(&mut provisional, 2);
+        let connection = reading.fail_saves();
+        assert!(
+            reading
+                .state
+                .save(Some(provisional.clone()))
+                .wait()
+                .is_err()
+        );
+        let moved = reading.dir.path().join("moved.md");
+        std::fs::rename(&old_path, &moved).unwrap();
+        connection.execute_batch("DROP TRIGGER fail_save").unwrap();
+        // A rejected Locate leaves the retained session unbound.
+        assert!(
+            reading
+                .state
+                .locate(
+                    reading.record.id.clone(),
+                    reading.dir.path().join("missing.md")
+                )
+                .wait()
+                .is_err()
+        );
+        assert!(!reading.state.reconcile(&mut provisional.clone()));
+        let located = reading
+            .state
+            .locate(reading.record.id.clone(), moved.clone())
+            .wait()
+            .unwrap();
+        assert_eq!(located.locator, provisional.locator);
+        let other = reuse.then(|| {
+            std::fs::write(&old_path, "# Another document").unwrap();
+            let other = reading
+                .state
+                .document(old_path.clone())
+                .wait()
+                .unwrap()
+                .record;
+            reading.state.save(Some(other.clone())).wait().unwrap();
+            other
+        });
+        for _ in 0..2 {
+            reading
+                .state
+                .save(Some(provisional.clone()))
+                .wait()
+                .unwrap();
+            let recovered = reading.persisted(moved.clone());
+            assert_eq!(recovered.id, reading.record.id);
+            assert_eq!(recovered.locator, provisional.locator);
+            assert_eq!(recovered.settings, provisional.settings);
+            assert_eq!(
+                reading.state.bookmarks(recovered.id).wait().unwrap().len(),
+                1
+            );
+            assert_eq!(
+                reading.state.recents().wait().unwrap().len(),
+                if reuse { 2 } else { 1 }
+            );
+            if let Some(other) = &other {
+                let unchanged = reading.persisted(old_path.clone());
+                assert_eq!(unchanged.id, other.id);
+                assert!(unchanged.locator.is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn an_unreadable_saved_position_opens_at_the_start_and_keeps_identity() {
+    let mut reading = Reading::new();
+    passage(&mut reading.record, 1);
+    reading
+        .state
+        .bookmark(reading.record.clone(), bookmark(&reading.record, "kept"))
+        .wait()
+        .unwrap();
+    let db = Connection::open(&reading.database).unwrap();
+    db.execute(
+        "UPDATE documents SET payload=json_set(payload, '$.locator.fraction', 7)",
+        [],
+    )
+    .unwrap();
+    let opened = reading
+        .state
+        .document(reading.record.path.clone())
+        .wait()
+        .unwrap();
+    assert!(opened.storage_error.is_none());
+    assert!(matches!(opened.repair, Some(Repair::Position(_))));
+    assert_eq!(opened.record.id, reading.record.id);
+    assert!(opened.record.locator.is_none());
+    assert_eq!(opened.record.settings, reading.record.settings);
+
+    db.execute("UPDATE documents SET payload='not JSON'", [])
+        .unwrap();
+    let opened = reading
+        .state
+        .document(reading.record.path.clone())
+        .wait()
+        .unwrap();
+    assert!(opened.storage_error.is_none());
+    assert!(matches!(opened.repair, Some(Repair::Record(_))));
+    assert_eq!(opened.record.id, reading.record.id);
+    assert_eq!(opened.record.path, reading.record.path);
+    assert!(opened.record.locator.is_none());
+    // One unreadable row neither blanks Home nor detaches bookmarks.
+    let recents = reading.state.recents().wait().unwrap();
+    assert_eq!(recents.len(), 1);
+    assert_eq!(recents[0].id, reading.record.id);
+    assert_eq!(
+        reading
+            .state
+            .bookmarks(reading.record.id.clone())
+            .wait()
+            .unwrap()
+            .len(),
+        1
+    );
+    // The next save replaces the unreadable row.
+    let mut record = opened.record;
+    passage(&mut record, 2);
+    reading.state.save(Some(record.clone())).wait().unwrap();
+    assert!(reading.state.status().error.is_none());
+    let reopened = reading
+        .state
+        .document(reading.record.path.clone())
+        .wait()
+        .unwrap();
+    assert!(reopened.repair.is_none());
+    assert_eq!(reopened.record.locator, record.locator);
+}
+
+#[test]
+fn a_retained_snapshot_supersedes_an_unreadable_saved_position() {
+    let mut reading = Reading::new();
+    reading
+        .state
+        .save(Some(reading.record.clone()))
+        .wait()
+        .unwrap();
+    let connection = reading.fail_saves();
+    passage(&mut reading.record, 2);
+    assert!(
+        reading
+            .state
+            .save(Some(reading.record.clone()))
+            .wait()
+            .is_err()
+    );
+    connection
+        .execute("UPDATE documents SET payload='not JSON'", [])
+        .unwrap();
+    let opened = reading
+        .state
+        .document(reading.record.path.clone())
+        .wait()
+        .unwrap();
+    assert!(opened.repair.is_none());
+    assert_eq!(opened.record.locator, reading.record.locator);
+    assert_eq!(opened.record.settings, reading.record.settings);
+}
+
+/// The reader moves the source, then opens it from its new place, which
+/// creates a separate document because nothing connects the two yet.
+fn open_moved_copy(reading: &Reading, read: bool) -> (PathBuf, DocumentRecord) {
+    let moved = reading.dir.path().join("moved.md");
+    std::fs::rename(&reading.record.path, &moved).unwrap();
+    let mut duplicate = reading.state.document(moved.clone()).wait().unwrap().record;
+    assert_ne!(duplicate.id, reading.record.id);
+    duplicate.last_opened = reading.record.last_opened + 1;
+    if read {
+        passage(&mut duplicate, 3);
+    }
+    reading.state.save(Some(duplicate.clone())).wait().unwrap();
+    (duplicate.path.clone(), duplicate)
+}
+
+#[test]
+fn locate_absorbs_a_duplicate_opened_at_the_new_place() {
+    let mut reading = Reading::new();
+    reading.record.last_opened = 1_000;
+    passage(&mut reading.record, 1);
+    reading
+        .state
+        .bookmark(
+            reading.record.clone(),
+            bookmark(&reading.record, "original"),
+        )
+        .wait()
+        .unwrap();
+    let (moved, duplicate) = open_moved_copy(&reading, true);
+    let located = reading
+        .state
+        .locate(reading.record.id.clone(), moved.clone())
+        .wait()
+        .unwrap();
+    assert_eq!(located.id, reading.record.id);
+    assert_eq!(located.path, moved);
+    // The duplicate was read after the move, so its position is the newest.
+    assert_eq!(located.locator, duplicate.locator);
+    assert_eq!(located.settings, duplicate.settings);
+    assert_eq!(reading.state.recents().wait().unwrap().len(), 1);
+    assert_eq!(reading.persisted(moved).id, reading.record.id);
+    // A session that still holds the duplicate follows the located document.
+    assert_eq!(
+        reading
+            .state
+            .bookmarks(duplicate.id.clone())
+            .wait()
+            .unwrap()
+            .len(),
+        1
+    );
+    let mut live = duplicate.clone();
+    assert!(reading.state.reconcile(&mut live));
+    assert_eq!(live.id, reading.record.id);
+    assert!(reading.state.status().error.is_none());
+}
+
+#[test]
+fn locate_keeps_its_own_position_over_an_unread_duplicate() {
+    let mut reading = Reading::new();
+    reading.record.last_opened = 1_000;
+    passage(&mut reading.record, 1);
+    reading
+        .state
+        .save(Some(reading.record.clone()))
+        .wait()
+        .unwrap();
+    let (moved, _) = open_moved_copy(&reading, false);
+    let located = reading
+        .state
+        .locate(reading.record.id.clone(), moved)
+        .wait()
+        .unwrap();
+    assert_eq!(located.locator, reading.record.locator);
+    assert_eq!(located.settings, reading.record.settings);
+}
+
+#[test]
+fn locate_refuses_to_combine_a_duplicate_that_has_bookmarks() {
+    let mut reading = Reading::new();
+    passage(&mut reading.record, 1);
+    reading
+        .state
+        .save(Some(reading.record.clone()))
+        .wait()
+        .unwrap();
+    let (moved, duplicate) = open_moved_copy(&reading, true);
+    reading
+        .state
+        .bookmark(duplicate.clone(), bookmark(&duplicate, "duplicate"))
+        .wait()
+        .unwrap();
+    let error = reading
+        .state
+        .locate(reading.record.id.clone(), moved.clone())
+        .wait()
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("separate document"), "{error}");
+    assert!(!error.contains("UNIQUE"), "{error}");
+    assert!(reading.state.status().error.is_none());
+    assert_eq!(reading.persisted(moved).id, duplicate.id);
+    assert_eq!(reading.state.recents().wait().unwrap().len(), 2);
+}
+
+#[test]
+fn locate_prefers_a_newer_duplicate_over_an_older_retained_snapshot() {
+    let mut reading = Reading::new();
+    reading.record.last_opened = 1_000;
+    reading
+        .state
+        .save(Some(reading.record.clone()))
+        .wait()
+        .unwrap();
+    let connection = Connection::open(&reading.database).unwrap();
+    connection
+        .execute_batch(&format!(
+            "CREATE TRIGGER fail_original BEFORE INSERT ON documents WHEN NEW.id='{}'
+            BEGIN SELECT RAISE(FAIL, 'fixture cannot save the original'); END;",
+            reading.record.id
+        ))
+        .unwrap();
+    passage(&mut reading.record, 1);
+    assert!(
+        reading
+            .state
+            .save(Some(reading.record.clone()))
+            .wait()
+            .is_err()
+    );
+    let moved = reading.dir.path().join("moved.md");
+    std::fs::rename(&reading.record.path, &moved).unwrap();
+    let mut duplicate = reading.state.document(moved.clone()).wait().unwrap().record;
+    duplicate.last_opened = 2_000;
+    passage(&mut duplicate, 3);
+    // The duplicate is saved; the retry for the original still fails.
+    assert!(reading.state.save(Some(duplicate.clone())).wait().is_err());
+    assert_eq!(reading.persisted(moved.clone()).id, duplicate.id);
+    connection
+        .execute_batch("DROP TRIGGER fail_original")
+        .unwrap();
+    let located = reading
+        .state
+        .locate(reading.record.id.clone(), moved.clone())
+        .wait()
+        .unwrap();
+    assert_eq!(located.locator, duplicate.locator);
+    // The superseded snapshot is not retried over the newer position.
+    reading.state.save(None).wait().unwrap();
+    assert!(!reading.state.status().pending);
+    assert_eq!(reading.persisted(moved).locator, duplicate.locator);
 }

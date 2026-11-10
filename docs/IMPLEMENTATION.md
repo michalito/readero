@@ -1,6 +1,36 @@
 # Implementation and quality record
 
-Updated 13 October 2026 · Readero 0.1.1 personal preview
+Updated 10 November 2026 · Readero 0.1.1 personal preview
+
+## Reading-state persistence review · 10 November 2026
+
+The SQLite store is now a stateless repository. The reading-state worker owns
+the only map from provisional sessions to stored identities and reconciles
+every retained snapshot before it reaches the store; the store's duplicate
+session map, which a store reopen or a notebook Locate could leave stale, is
+gone. Write transactions take the database lock up front, and migrations run
+through one ordered list. Schema 3 remains the compatibility fence and its
+comment records that any payload change must bump it.
+
+The review fixed four defects. A document opened through a symlink while the
+database was locked kept a non-canonical path, so its later save created a
+second document and detached new bookmarks from the original. Bookmarks created
+within the same second came back in random order. A stored row with an
+unreadable position or payload made the document open as if storage had failed,
+showing a persistent "not being saved" banner; it now opens at the beginning
+with its identity, bookmarks and notebook intact, and a one-time notice says
+what was reset. Locate onto a file the reader had already opened from its new
+place failed with a raw SQLite constraint message. Locate now merges that
+duplicate when it holds no bookmarks and no notebook content, keeping whichever
+progress was opened most recently, and otherwise explains why the two cannot be
+combined.
+
+The core suite passes with 66 tests. Eleven are new: eight fail against the
+previous code, two cover the new repair notice, and one moves the store-level
+provisional-relink test to the worker, which now owns that behaviour. Formatting and strict Clippy pass for all
+targets with the smoke feature. This machine runs Ubuntu 24.04 without the
+Papers and WebKitGTK 6 runtimes, so the desktop executable was type-checked
+only; the native smoke flows were not run for this change.
 
 ## Review follow-up · 13 October 2026
 
@@ -354,8 +384,8 @@ The [PRD](MVP_PRD.md) remains the acceptance baseline. This preview is ready for
 - `document.rs` defines durable identity, settings, locators, and validation.
 - `notebook.rs` and `notebook/history.rs` define the versioned notebook, selected sections, references, validation, and shared text/connection undo. `passage.rs` defines precise quotation targets and exact contextual matching. `desktop/shell/notebook.rs` owns the live editor, responsive layout, asynchronous loading and save presentation; its editing and passages modules own native interaction. The existing reading-state worker retains and persists drafts.
 - `desktop/shell/opening.rs` owns candidate preparation, native readiness and cancellation, history/link requests, source watching, deferred reloads, and Home/Close transitions. Active reading state remains saveable until a replacement is ready; candidate failure retains the working reader. Its private state replaces the standalone save gate and caller-managed pending fields.
-- `reading_state.rs` owns save retries, provisional identity reconciliation, Locate, recents removal, and bookmark-save ordering on one worker. Operations enter its queue before their replies are awaited, and retained snapshots are independent of reply delivery. The shell supplies stable positions, debounce timers, and presentation; it reads the latest save status instead of replaying status from delayed replies.
-- `state.rs` owns schema v3 and the SQLite implementation: transactional record updates, notebooks, bookmarks, recents, and relinking. Reading state uses this implementation directly, including real temporary SQLite databases in its tests.
+- `reading_state.rs` owns save retries, provisional identity reconciliation, Locate, recents removal, and bookmark-save ordering on one worker. It holds the only session-to-identity map and reconciles every record before it reaches the store. Operations enter its queue before their replies are awaited, and retained snapshots are independent of reply delivery. The shell supplies stable positions, debounce timers, and presentation; it reads the latest save status instead of replaying status from delayed replies.
+- `state.rs` owns schema v3 and the SQLite implementation: a stateless repository for transactional record updates, notebooks, bookmarks, recents, and relinking. Identity resolves from stored data only (an id match beats a path match, and the stored path wins); columns are authoritative over the JSON payload. Reading state uses this implementation directly, including real temporary SQLite databases in its tests.
 - `resource.rs` validates archive/resource limits and serves only capability-scoped resources. Markdown sidecars resolve within the source directory after canonicalization; EPUBs are not extracted to disk.
 - `markdown.rs` renders the defined dialect and creates stable content-block IDs with source offsets.
 - `desktop/pdf.rs` adapts Papers models, native page coordinates, async loading, search, and settled restoration.

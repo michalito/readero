@@ -96,7 +96,7 @@ fn a_failed_or_cancelled_open_does_not_enter_recents() {
     let path = temp.path().join("reading.MD");
     std::fs::write(&path, "# Text").unwrap();
     let store = Store::open(&temp.path().join("reading.sqlite3")).unwrap();
-    let record = store.document(&path).unwrap();
+    let record = store.document(&path).unwrap().record;
     assert_eq!(record.format, Format::Markdown);
     assert!(store.recents().unwrap().is_empty());
     store.save(&record).unwrap();
@@ -110,7 +110,7 @@ fn failing_transaction_keeps_the_previous_saved_location() {
     std::fs::write(&source, b"fixture").unwrap();
     let path = temp.path().join("reading.sqlite3");
     let store = Store::open(&path).unwrap();
-    let mut record = store.document(&source).unwrap();
+    let mut record = store.document(&source).unwrap().record;
     record.locator = Some(Locator {
         version: 1,
         anchor: Anchor::Pdf {
@@ -134,7 +134,13 @@ fn failing_transaction_keeps_the_previous_saved_location() {
     });
     assert!(store.save(&record).is_err());
     assert!(matches!(
-        store.document(&source).unwrap().locator.unwrap().anchor,
+        store
+            .document(&source)
+            .unwrap()
+            .record
+            .locator
+            .unwrap()
+            .anchor,
         Anchor::Pdf { page: 4, .. }
     ));
 }

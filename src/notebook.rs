@@ -121,6 +121,12 @@ impl Notebook {
         Ok(())
     }
 
+    /// Whether the reader has written text or saved passages. Panel layout and
+    /// editing context alone are not content.
+    pub fn has_content(&self) -> bool {
+        !self.text.is_empty() || !self.references.is_empty()
+    }
+
     pub fn upgrade(mut self) -> Result<Self> {
         self.validate()?;
         self.version = 2;

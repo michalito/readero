@@ -4,13 +4,24 @@
 //! awaited. Dropping or delaying a reply never cancels the operation. SQLite,
 //! retained snapshots, and identity reconciliation have the same owner. The
 //! desktop supplies stable snapshots and owns its debounce and native widgets.
-use crate::{document::*, notebook::Notebook, state::Store};
+//!
+//! A document opened while storage is unavailable gets a provisional record
+//! with a random id. When one of its snapshots reaches the store, the worker
+//! records the stored identity that session belongs to. Every record is
+//! reconciled with these identities before it reaches the store, so a session
+//! keeps following its document through Locate, even if another file later
+//! takes its old path.
+use crate::{
+    document::*,
+    notebook::Notebook,
+    state::{Identity, LoadedDocument, Repair, Store},
+};
 use std::{
     collections::HashMap,
     future::{Future, IntoFuture},
     path::{Path, PathBuf},
     pin::Pin,
-    sync::{Arc, Mutex, mpsc},
+    sync::{Arc, Mutex, MutexGuard, mpsc},
 };
 
 type Work = Box<dyn FnOnce(&mut State) + Send>;
@@ -27,11 +38,7 @@ impl<T> Reply<T> {
     }
     fn stopped(&self) -> Error {
         let error = stopped();
-        self.observed
-            .lock()
-            .expect("reading-state observation")
-            .status
-            .error = Some(error.to_string());
+        lock(&self.observed).status.error = Some(error.to_string());
         error
     }
 }
@@ -49,6 +56,8 @@ impl<T: Send + 'static> IntoFuture for Reply<T> {
 pub struct OpenedDocument {
     pub record: DocumentRecord,
     pub storage_error: Option<String>,
+    /// Saved reading data that could not be read and was reset. Saving works.
+    pub repair: Option<Repair>,
 }
 
 #[derive(Clone, Default)]
@@ -60,10 +69,23 @@ pub struct SaveStatus {
 #[derive(Default)]
 struct Observed {
     status: SaveStatus,
-    identities: HashMap<String, (String, PathBuf)>,
+    /// Session id → the stored identity it belongs to. Stored ids map to
+    /// themselves, so Locate can update the path every session follows.
+    identities: HashMap<String, Identity>,
 }
 
 impl Observed {
+    /// Apply only acknowledged identity, never a snapshot's progress.
+    fn reconcile(&self, record: &mut DocumentRecord) -> bool {
+        let Some(identity) = self.identities.get(&record.id) else {
+            return false;
+        };
+        let changed = record.id != identity.id || record.path != identity.path;
+        record.id.clone_from(&identity.id);
+        record.path.clone_from(&identity.path);
+        changed
+    }
+
     fn same_document(&self, a: &DocumentRecord, b: &DocumentRecord) -> bool {
         let (a_id, a_path) = self.identity(a);
         let (b_id, b_path) = self.identity(b);
@@ -73,10 +95,14 @@ impl Observed {
     fn identity<'a>(&'a self, record: &'a DocumentRecord) -> (&'a str, &'a Path) {
         self.identities
             .get(&record.id)
-            .map_or((&record.id, record.path.as_path()), |(id, path)| {
-                (id, path.as_path())
+            .map_or((&record.id, record.path.as_path()), |identity| {
+                (&identity.id, identity.path.as_path())
             })
     }
+}
+
+fn lock(observed: &Mutex<Observed>) -> MutexGuard<'_, Observed> {
+    observed.lock().expect("reading-state observation")
 }
 
 #[derive(Clone)]
@@ -134,40 +160,34 @@ impl ReadingState {
 
     /// A failed load is never an empty notebook. Retained drafts take precedence
     /// over disk, including after a provisional document has been reconciled.
-    pub fn notebook(&self, mut record: DocumentRecord) -> Reply<Notebook> {
+    pub fn notebook(&self, record: DocumentRecord) -> Reply<Notebook> {
         self.call(move |state| {
-            reconcile(
-                &state.observed.lock().expect("reading-state observation"),
-                &mut record,
-            );
-            let identities = state.observed.lock().expect("reading-state observation");
+            let record = state.reconciled(record);
+            let observed = lock(&state.observed);
             if let Some((_, notebook)) = state
                 .notebooks
                 .iter()
                 .rev()
-                .find(|(r, _)| identities.same_document(r, &record))
+                .find(|(draft, _)| observed.same_document(draft, &record))
             {
                 return Ok(notebook.clone());
             }
-            drop(identities);
+            drop(observed);
             state.store()?.notebook(&record)
         })
     }
 
     /// Retain the latest complete draft before attempting any writes. Replies
     /// acknowledge queue completion, never ownership of the live editor buffer.
-    pub fn save_notebook(&self, mut record: DocumentRecord, notebook: Notebook) -> Reply<()> {
+    pub fn save_notebook(&self, record: DocumentRecord, notebook: Notebook) -> Reply<()> {
         self.call(move |state| {
             notebook.validate()?;
-            reconcile(
-                &state.observed.lock().expect("reading-state observation"),
-                &mut record,
-            );
-            let identities = state.observed.lock().expect("reading-state observation");
+            let record = state.reconciled(record);
+            let observed = lock(&state.observed);
             state
                 .notebooks
-                .retain(|(r, _)| !identities.same_document(r, &record));
-            drop(identities);
+                .retain(|(draft, _)| !observed.same_document(draft, &record));
+            drop(observed);
             state.notebooks.push((record, notebook));
             let result = state.flush();
             state.publish(&result);
@@ -218,7 +238,10 @@ impl ReadingState {
     }
 
     pub fn bookmarks(&self, id: String) -> Reply<Vec<Bookmark>> {
-        self.call(move |state| state.store()?.bookmarks(&state.identity(&id)))
+        self.call(move |state| {
+            let id = state.identity(&id);
+            state.store()?.bookmarks(&id)
+        })
     }
 
     pub fn remove_bookmark(&self, id: String) -> Reply<()> {
@@ -227,20 +250,13 @@ impl ReadingState {
 
     /// Always read the latest completed state, not the state of a delayed reply.
     pub fn status(&self) -> SaveStatus {
-        self.observed
-            .lock()
-            .expect("reading-state observation")
-            .status
-            .clone()
+        lock(&self.observed).status.clone()
     }
 
     /// Apply only acknowledged identity, never overwrite the reader's newer
     /// position or appearance with a completed save's snapshot.
     pub fn reconcile(&self, record: &mut DocumentRecord) -> bool {
-        reconcile(
-            &self.observed.lock().expect("reading-state observation"),
-            record,
-        )
+        lock(&self.observed).reconcile(record)
     }
 
     fn call<T: Send + 'static>(
@@ -256,11 +272,7 @@ impl ReadingState {
             }))
             .is_err()
         {
-            self.observed
-                .lock()
-                .expect("reading-state observation")
-                .status
-                .error = Some(stopped().to_string());
+            lock(&self.observed).status.error = Some(stopped().to_string());
             let _ = failure.send_blocking(Err(stopped()));
         }
         Reply {
@@ -289,134 +301,159 @@ struct State {
     observed: Arc<Mutex<Observed>>,
 }
 impl State {
-    fn store(&self) -> Result<&Store> {
-        self.store
-            .as_ref()
-            .map_err(|error| Error::Invalid(error.to_string()))
+    fn store(&mut self) -> Result<&mut Store> {
+        self.store.as_mut().map_err(|error| unavailable(error))
+    }
+
+    fn reconciled(&self, mut record: DocumentRecord) -> DocumentRecord {
+        lock(&self.observed).reconcile(&mut record);
+        record
     }
 
     fn identity(&self, id: &str) -> String {
-        self.observed
-            .lock()
-            .expect("reading-state observation")
+        lock(&self.observed)
             .identities
             .get(id)
-            .map_or_else(|| id.to_owned(), |(id, _)| id.clone())
+            .map_or_else(|| id.to_owned(), |identity| identity.id.clone())
     }
 
-    fn document(&self, path: &Path) -> Result<OpenedDocument> {
-        let loaded = self.store().and_then(|store| store.document(path));
-        let (mut record, storage_error) = match loaded {
-            Ok(record) => (record, None),
-            Err(error) if path.is_file() => (
-                DocumentRecord::new(path.to_path_buf())?,
-                Some(error.to_string()),
-            ),
-            Err(error) => return Err(error),
-        };
-        if let Some(retained) = self.pending.iter().rev().find(|r| r.path == record.path) {
+    fn document(&mut self, path: &Path) -> Result<OpenedDocument> {
+        let (mut record, mut repair, storage_error) =
+            match self.store().and_then(|store| store.document(path)) {
+                Ok(LoadedDocument { record, repair }) => (record, repair, None),
+                // Reading stays possible. Stored paths are canonical, so the
+                // provisional record must be too for later saves to find it.
+                Err(error) if path.is_file() => (
+                    DocumentRecord::new(std::fs::canonicalize(path)?)?,
+                    None,
+                    Some(error.to_string()),
+                ),
+                Err(error) => return Err(error),
+            };
+        let observed = lock(&self.observed);
+        if let Some(retained) = self
+            .pending
+            .iter()
+            .rev()
+            .find(|retained| observed.same_document(retained, &record))
+        {
             record.locator = retained.locator.clone();
             record.settings = retained.settings.clone();
+            repair = None;
         }
         Ok(OpenedDocument {
             record,
             storage_error,
+            repair,
         })
     }
 
-    fn retain(&mut self, mut record: DocumentRecord) -> DocumentRecord {
-        reconcile(
-            &self.observed.lock().expect("reading-state observation"),
-            &mut record,
-        );
+    fn retain(&mut self, record: DocumentRecord) -> DocumentRecord {
+        let record = self.reconciled(record);
         self.pending
             .retain(|r| r.id != record.id && r.path != record.path);
         self.pending.push(record.clone());
         record
     }
 
-    fn persist(&self, record: &DocumentRecord) -> Result<DocumentRecord> {
-        let saved = self.store()?.save_session_record(record)?;
-        self.acknowledge(record, &saved);
+    fn persist(&mut self, record: &DocumentRecord) -> Result<Identity> {
+        let saved = self.store()?.save_session(record)?;
+        self.acknowledge(&record.id, &saved);
         Ok(saved)
     }
 
-    fn acknowledge(&self, session: &DocumentRecord, saved: &DocumentRecord) {
-        let mut observed = self.observed.lock().expect("reading-state observation");
-        for (id, path) in observed.identities.values_mut() {
-            if id == &saved.id {
-                *path = saved.path.clone();
+    /// Bind `session` to a stored identity. Sessions already bound to that
+    /// identity follow its path, and sessions bound to `session` itself (when
+    /// it is a stored id merged into another document) follow it there.
+    fn acknowledge(&self, session: &str, saved: &Identity) {
+        let mut observed = lock(&self.observed);
+        for identity in observed.identities.values_mut() {
+            if identity.id == saved.id || identity.id == session {
+                identity.clone_from(saved);
             }
         }
-        let identity = (saved.id.clone(), saved.path.clone());
         observed
             .identities
-            .insert(session.id.clone(), identity.clone());
-        observed.identities.insert(saved.id.clone(), identity);
+            .insert(session.to_owned(), saved.clone());
+        observed.identities.insert(saved.id.clone(), saved.clone());
     }
 
     fn flush(&mut self) -> Result<()> {
         self.store()?;
-        let mut error = None;
+        let mut first_error = None;
         for record in std::mem::take(&mut self.pending) {
-            if let Err(failed) = self.persist(&record) {
+            // Identity may have been acknowledged since this was retained.
+            let record = self.reconciled(record);
+            if let Err(error) = self.persist(&record) {
                 self.pending.push(record);
-                if error.is_none() {
-                    error = Some(failed);
-                }
+                first_error.get_or_insert(error);
             }
         }
-        for (mut record, notebook) in std::mem::take(&mut self.notebooks) {
-            reconcile(
-                &self.observed.lock().expect("reading-state observation"),
-                &mut record,
-            );
-            match self.store()?.save_notebook(&record, &notebook) {
-                Ok(saved) => self.acknowledge(&record, &saved),
-                Err(failed) => {
+        for (record, notebook) in std::mem::take(&mut self.notebooks) {
+            let record = self.reconciled(record);
+            match self
+                .store()
+                .and_then(|store| store.save_notebook(&record, &notebook))
+            {
+                Ok(saved) => self.acknowledge(&record.id, &saved),
+                Err(error) => {
                     self.notebooks.push((record, notebook));
-                    if error.is_none() {
-                        error = Some(failed);
-                    }
+                    first_error.get_or_insert(error);
                 }
             }
         }
-        error.map_or(Ok(()), Err)
+        first_error.map_or(Ok(()), Err)
     }
 
     fn locate(&mut self, id: &str, path: &Path) -> Result<DocumentRecord> {
-        let notebook_sessions = self
+        let pending = std::mem::take(&mut self.pending);
+        self.pending = pending.into_iter().map(|r| self.reconciled(r)).collect();
+        let notebooks = std::mem::take(&mut self.notebooks);
+        self.notebooks = notebooks
+            .into_iter()
+            .map(|(draft, notebook)| (self.reconciled(draft), notebook))
+            .collect();
+        let store = self.store.as_mut().map_err(|error| unavailable(error))?;
+        // Drafts are bound by stored identity before the path changes.
+        let owned = self
             .notebooks
             .iter()
-            .filter_map(|(session, _)| {
-                match self
-                    .store()
-                    .and_then(|store| store.stored_identity(session))
-                {
-                    Ok(Some((saved_id, _))) if saved_id == id => Some(Ok(session.clone())),
-                    Err(error) => Some(Err(error)),
-                    _ => None,
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let (record, sessions) = self.store()?.relink_sessions(id, path, &self.pending)?;
-        for session in &self.pending {
-            if session.id == record.id || sessions.contains(&session.id) {
-                self.acknowledge(session, &record);
+            .map(|(draft, _)| Ok(store.resolve(draft)?.is_some_and(|owner| owner.id == id)))
+            .collect::<Result<Vec<bool>>>()?;
+        let others_written: Vec<DocumentRecord> = self
+            .notebooks
+            .iter()
+            .zip(&owned)
+            .filter(|((_, notebook), own)| !**own && notebook.has_content())
+            .map(|((draft, _), _)| draft.clone())
+            .collect();
+        let relinked = store.relink(id, path, &self.pending, &others_written)?;
+        let located = Identity {
+            id: relinked.record.id.clone(),
+            path: relinked.record.path.clone(),
+        };
+        self.acknowledge(id, &located);
+        for session in relinked.sessions.iter().chain(&relinked.absorbed) {
+            self.acknowledge(session, &located);
+        }
+        // Locate has durably written the newest retained progress.
+        self.pending.retain(|r| !relinked.sessions.contains(&r.id));
+        let notebooks = std::mem::take(&mut self.notebooks);
+        for ((draft, notebook), own) in notebooks.into_iter().zip(owned) {
+            if own {
+                self.acknowledge(&draft.id, &located);
+                self.notebooks.push((draft, notebook));
+            } else if draft.path != located.path {
+                self.notebooks.push((draft, notebook));
             }
+            // Otherwise the draft belonged to the merged duplicate and had no
+            // content. Saving it would replace this document's notebook.
         }
-        self.acknowledge(&record, &record);
-        for session in &notebook_sessions {
-            self.acknowledge(session, &record);
-        }
-        // Locate has already durably written the newest retained state.
-        self.pending
-            .retain(|r| r.id != record.id && !sessions.contains(&r.id));
-        Ok(record)
+        Ok(relinked.record)
     }
 
     fn publish<T>(&self, result: &Result<T>) {
-        let mut observed = self.observed.lock().expect("reading-state observation");
+        let mut observed = lock(&self.observed);
         observed.status.pending = !self.pending.is_empty() || !self.notebooks.is_empty();
         match result {
             Err(error) => observed.status.error = Some(error.to_string()),
@@ -426,16 +463,10 @@ impl State {
     }
 }
 
-fn reconcile(observed: &Observed, record: &mut DocumentRecord) -> bool {
-    if let Some((id, path)) = observed.identities.get(&record.id) {
-        let changed = &record.id != id || &record.path != path;
-        record.id = id.clone();
-        record.path = path.clone();
-        changed
-    } else {
-        false
-    }
+fn unavailable(error: &Error) -> Error {
+    Error::Invalid(error.to_string())
 }
+
 fn stopped() -> Error {
     Error::Invalid("The reading-state worker stopped.".into())
 }

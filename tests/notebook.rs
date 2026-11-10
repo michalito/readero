@@ -377,7 +377,10 @@ fn v1_migration_preserves_identity_bookmarks_and_reading_state() {
     db.execute_batch("DROP TABLE notebooks; PRAGMA user_version=1;")
         .unwrap();
     let migrated = Store::open(&f.database).unwrap();
-    assert_eq!(migrated.document(&f.record.path).unwrap().id, f.record.id);
+    assert_eq!(
+        migrated.document(&f.record.path).unwrap().record.id,
+        f.record.id
+    );
     assert_eq!(migrated.bookmarks(&f.record.id).unwrap().len(), 1);
     assert_eq!(migrated.notebook(&f.record).unwrap(), Notebook::default());
     assert_eq!(
@@ -415,4 +418,95 @@ fn failed_migration_rolls_back_without_modifying_old_tables() {
         .unwrap(),
         before
     );
+}
+
+/// The reader moves the source, then opens it from its new place.
+fn open_moved_copy(f: &Fixture) -> DocumentRecord {
+    let moved = f.dir.path().join("moved.md");
+    std::fs::rename(&f.record.path, &moved).unwrap();
+    let duplicate = f.state.document(moved).wait().unwrap().record;
+    f.state.save(Some(duplicate.clone())).wait().unwrap();
+    duplicate
+}
+
+#[test]
+fn locate_refuses_a_duplicate_with_notebook_text_but_absorbs_an_empty_notebook() {
+    let f = Fixture::new();
+    f.state
+        .save_notebook(f.record.clone(), draft())
+        .wait()
+        .unwrap();
+    let duplicate = open_moved_copy(&f);
+    let written = Notebook {
+        text: "Notes written in the duplicate".into(),
+        ..Notebook::default()
+    };
+    f.state
+        .save_notebook(duplicate.clone(), written)
+        .wait()
+        .unwrap();
+    let refused = f
+        .state
+        .locate(f.record.id.clone(), duplicate.path.clone())
+        .wait();
+    assert!(refused.unwrap_err().to_string().contains("notebook"));
+    // Showing the panel saves a notebook row without any of the reader's text.
+    let shown = Notebook {
+        visible: true,
+        ..Notebook::default()
+    };
+    f.state
+        .save_notebook(duplicate.clone(), shown)
+        .wait()
+        .unwrap();
+    let located = f
+        .state
+        .locate(f.record.id.clone(), duplicate.path.clone())
+        .wait()
+        .unwrap();
+    assert_eq!(located.id, f.record.id);
+    assert_eq!(f.state.notebook(located).wait().unwrap(), draft());
+    assert_eq!(f.state.notebook(duplicate).wait().unwrap(), draft());
+}
+
+#[test]
+fn locate_respects_a_retained_duplicate_draft_and_discards_only_an_empty_one() {
+    let f = Fixture::new();
+    f.state
+        .save_notebook(f.record.clone(), draft())
+        .wait()
+        .unwrap();
+    let duplicate = open_moved_copy(&f);
+    let db = f.reject_notebooks();
+    let unsaved = Notebook {
+        text: "Unsaved duplicate notes".into(),
+        ..Notebook::default()
+    };
+    assert!(
+        f.state
+            .save_notebook(duplicate.clone(), unsaved)
+            .wait()
+            .is_err()
+    );
+    assert!(
+        f.state
+            .locate(f.record.id.clone(), duplicate.path.clone())
+            .wait()
+            .is_err()
+    );
+    // The reader clears the text; the newest retained draft is now empty.
+    assert!(
+        f.state
+            .save_notebook(duplicate.clone(), Notebook::default())
+            .wait()
+            .is_err()
+    );
+    f.state
+        .locate(f.record.id.clone(), duplicate.path.clone())
+        .wait()
+        .unwrap();
+    db.execute_batch("DROP TRIGGER reject_notebook").unwrap();
+    f.state.save(None).wait().unwrap();
+    assert!(!f.state.status().pending);
+    assert_eq!(f.saved(), draft());
 }

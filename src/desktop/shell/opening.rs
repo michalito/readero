@@ -41,6 +41,8 @@ struct Candidate {
     password: Option<adw::AlertDialog>,
     startup_timer: Option<glib::SourceId>,
     sidebar: bool,
+    /// Shown once the document is displayed, so a failed open stays quiet.
+    notice: Option<&'static str>,
 }
 
 struct Committed {
@@ -99,6 +101,7 @@ impl Shell {
             password: None,
             startup_timer: None,
             sidebar: self.sidebar().reveals_child(),
+            notice: None,
         }));
         if let Err(error) = Format::from_path(&path) {
             self.open_error(&error.to_string());
@@ -116,9 +119,14 @@ impl Shell {
             let loaded = if let Some(pending) = pending { Some(pending.await) } else { None };
             let Some(shell) = weak.upgrade() else { return; };
             if !shell.is_open(serial) { return; }
+            let mut notice = None;
             let mut record = match loaded {
                 Some(Ok(opened)) => {
                     if let Some(error) = opened.storage_error { shell.storage_error(&error); }
+                    if let Some(repair) = &opened.repair {
+                        glib::g_message!("readero", "Saved reading data was reset: {}", repair.detail());
+                        notice = Some(repair.message());
+                    }
                     opened.record
                 }
                 Some(Err(error)) => {
@@ -132,11 +140,13 @@ impl Shell {
                     record
                 }
             };
-            if let Some(candidate) = shell.opening.candidate.borrow().as_ref()
-                && let Some(target) = &candidate.request.location
-            {
-                record.locator = Some(target.locator.clone());
-                record.settings = target.settings.clone();
+            if let Some(candidate) = shell.opening.candidate.borrow_mut().as_mut() {
+                if let Some(target) = &candidate.request.location {
+                    record.locator = Some(target.locator.clone());
+                    record.settings = target.settings.clone();
+                } else {
+                    candidate.notice = notice;
+                }
             }
             if record.format == Format::Pdf {
                 shell.load_pdf(record, serial);
@@ -427,6 +437,9 @@ impl Shell {
             .expect("only a ready candidate can commit");
         if let Some(timer) = candidate.startup_timer {
             timer.remove();
+        }
+        if let Some(notice) = candidate.notice {
+            self.toast(notice);
         }
         let same_document = self
             .current

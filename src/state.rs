@@ -1,55 +1,117 @@
-//! A single-owner database. The desktop layer runs this on its state worker.
+//! SQLite persistence for documents, bookmarks and notebooks.
+//!
+//! The store is a stateless repository owned by the reading-state worker. It
+//! resolves identity only from stored data: an id match beats a path match,
+//! and the stored path is authoritative. Mapping provisional sessions to their
+//! stored identities is the worker's job, done before records reach the store.
 use crate::document::*;
 use crate::notebook::Notebook;
-use rusqlite::{Connection, OptionalExtension, params};
-use std::{cell::RefCell, collections::HashMap, path::Path, time::Duration};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+/// Readero refuses databases with a newer schema and leaves them unchanged.
+///
+/// Bump this, with a migration (even an empty one), whenever a stored payload
+/// changes shape. Older builds read an unreadable reading position as the
+/// start of the document, so an unfenced format change would let them
+/// overwrite newer data with defaults.
+const SCHEMA_VERSION: usize = 3;
+
+/// `MIGRATIONS[n]` upgrades schema version `n` to `n + 1`.
+const MIGRATIONS: [&str; SCHEMA_VERSION] = [
+    "CREATE TABLE documents (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, payload TEXT NOT NULL,
+        last_opened INTEGER NOT NULL, hidden INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE bookmarks (id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES documents(id),
+        payload TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
+    CREATE INDEX bookmarks_document ON bookmarks(document_id);",
+    "CREATE TABLE notebooks (
+        document_id TEXT PRIMARY KEY REFERENCES documents(id), payload TEXT NOT NULL);",
+    // No table changes: this fences builds that predate notebook payload
+    // version 2 (sections and captured passages).
+    "",
+];
+
+const DOCUMENT_COLUMNS: &str = "id, path, payload, last_opened";
+
+/// Where a stored document lives: its permanent id and current source path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Identity {
+    pub id: String,
+    pub path: PathBuf,
+}
+impl Identity {
+    fn of(record: &DocumentRecord) -> Self {
+        Self {
+            id: record.id.clone(),
+            path: record.path.clone(),
+        }
+    }
+}
+
+/// Saved reading data that could not be decoded and was replaced by defaults.
+/// Identity is unaffected, so bookmarks and the notebook stay attached.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Repair {
+    /// Only the reading position was unusable.
+    Position(String),
+    /// The whole record was unusable: position and appearance were reset.
+    Record(String),
+}
+impl Repair {
+    pub fn message(&self) -> &'static str {
+        match self {
+            Self::Position(_) => {
+                "The saved reading position couldn’t be read, so this document opens at the beginning."
+            }
+            Self::Record(_) => {
+                "The saved reading position and appearance couldn’t be read, so this document opens at the beginning with default appearance."
+            }
+        }
+    }
+
+    /// The underlying decoding or validation failure, for diagnostics.
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::Position(detail) | Self::Record(detail) => detail,
+        }
+    }
+}
+
+pub struct LoadedDocument {
+    pub record: DocumentRecord,
+    pub repair: Option<Repair>,
+}
+
+pub(crate) struct Relinked {
+    pub record: DocumentRecord,
+    /// Ids of the retained sessions that Locate merged into `record`.
+    pub sessions: Vec<String>,
+    /// The duplicate that owned the path and was merged into `record`.
+    pub absorbed: Option<String>,
+}
 
 pub struct Store {
     connection: Connection,
-    session_ids: RefCell<HashMap<String, String>>,
 }
 impl Store {
     pub fn open(path: &Path) -> Result<Self> {
-        // Notebook text and quotations share this database. Restrict the
-        // directory (including SQLite's auxiliary files) before opening it.
-        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            let mut directory = std::fs::DirBuilder::new();
-            directory.recursive(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                directory.mode(0o700);
-            }
-            directory.create(parent)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
-            }
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-            // Create privately and repair existing stores before SQLite can
-            // initialize, migrate, or recover them. Permission failures abort.
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .open(path)?;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
-        }
-        let connection = Connection::open(path)?;
+        restrict_permissions(path)?;
+        let mut connection = Connection::open(path)?;
         connection.busy_timeout(Duration::from_secs(3))?;
+        // Nothing is written before the version and integrity checks pass.
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if version > 3 {
-            return Err(Error::Invalid(
-                "This reading database was created by a newer Readero. It has been left unchanged."
-                    .into(),
-            ));
-        }
+        let version = usize::try_from(version)
+            .ok()
+            .filter(|version| *version <= SCHEMA_VERSION)
+            .ok_or_else(|| {
+                Error::Invalid(
+                    "This reading database was created by a newer Readero. It has been left unchanged."
+                        .into(),
+                )
+            })?;
         let integrity: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(Error::Invalid(
@@ -59,172 +121,121 @@ impl Store {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "journal_mode", "DELETE")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
-        if version == 0 {
-            connection.execute_batch("BEGIN IMMEDIATE;
-                CREATE TABLE documents (id TEXT PRIMARY KEY, path TEXT NOT NULL UNIQUE, payload TEXT NOT NULL,
-                    last_opened INTEGER NOT NULL, hidden INTEGER NOT NULL DEFAULT 0);
-                CREATE TABLE bookmarks (id TEXT PRIMARY KEY, document_id TEXT NOT NULL REFERENCES documents(id),
-                    payload TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch()));
-                CREATE INDEX bookmarks_document ON bookmarks(document_id);
-                PRAGMA user_version=1;
-                COMMIT;")?;
-        }
-        if version < 2 {
-            let transaction = connection.unchecked_transaction()?;
-            transaction.execute_batch(
-                "CREATE TABLE notebooks (
-                document_id TEXT PRIMARY KEY REFERENCES documents(id), payload TEXT NOT NULL);
-                PRAGMA user_version=2;",
-            )?;
+        for (from, migration) in MIGRATIONS.iter().enumerate().skip(version) {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            transaction.execute_batch(migration)?;
+            transaction.pragma_update(None, "user_version", from as i64 + 1)?;
             transaction.commit()?;
         }
-        if version < 3 {
-            let transaction = connection.unchecked_transaction()?;
-            transaction.pragma_update(None, "user_version", 3)?;
-            transaction.commit()?;
-        }
-        Ok(Self {
-            connection,
-            session_ids: RefCell::new(HashMap::new()),
-        })
-    }
-    pub fn document(&self, path: &Path) -> Result<DocumentRecord> {
-        let path = std::fs::canonicalize(path)?;
-        let saved: Option<String> = self
-            .connection
-            .query_row(
-                "SELECT payload FROM documents WHERE path=?1",
-                [path.to_string_lossy().as_ref()],
-                |r| r.get(0),
-            )
-            .optional()?;
-        match saved {
-            Some(json) => {
-                let mut record: DocumentRecord = serde_json::from_str(&json)?;
-                record.settings.normalize();
-                if let Some(loc) = &record.locator {
-                    loc.validate()?;
-                }
-                Ok(record)
-            }
-            None => DocumentRecord::new(path),
-        }
-    }
-    pub fn save(&self, record: &DocumentRecord) -> Result<()> {
-        if let Some(loc) = &record.locator {
-            loc.validate()?;
-        }
-        self.connection.execute("INSERT INTO documents(id,path,payload,last_opened) VALUES(?1,?2,?3,?4)
-            ON CONFLICT(id) DO UPDATE SET path=excluded.path,payload=excluded.payload,last_opened=excluded.last_opened,hidden=0",
-            params![record.id, record.path.to_string_lossy(), serde_json::to_string(record)?, record.last_opened])?;
-        Ok(())
-    }
-    pub fn recents(&self) -> Result<Vec<DocumentRecord>> {
-        let mut statement = self.connection.prepare(
-            "SELECT payload FROM documents WHERE hidden=0 ORDER BY last_opened DESC LIMIT 30",
-        )?;
-        let rows = statement.query_map([], |r| r.get::<_, String>(0))?;
-        rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
-    }
-    /// Reconnect a session opened while storage was unavailable. Only identity
-    /// and the authoritative path come from storage; the reader's current
-    /// progress and settings win. A retained snapshot must not undo a relink.
-    pub fn save_session(&self, record: &DocumentRecord) -> Result<String> {
-        self.save_session_record(record).map(|record| record.id)
-    }
-    pub(crate) fn save_session_record(&self, record: &DocumentRecord) -> Result<DocumentRecord> {
-        let session_id = record.id.clone();
-        let transaction = self.connection.unchecked_transaction()?;
-        let existing = self.stored_identity(record)?;
-        let mut record = record.clone();
-        if let Some((id, path)) = existing {
-            record.id = id;
-            record.path = path.into();
-        }
-        self.save(&record)?;
-        transaction.commit()?;
-        self.session_ids
-            .borrow_mut()
-            .insert(session_id, record.id.clone());
-        Ok(record)
+        Ok(Self { connection })
     }
 
-    pub(crate) fn stored_identity(
-        &self,
-        record: &DocumentRecord,
-    ) -> Result<Option<(String, String)>> {
-        let session_ids = self.session_ids.borrow();
-        let id = session_ids.get(&record.id).unwrap_or(&record.id);
-        Ok(self
+    /// The stored document at `path`, or a new unsaved record for it.
+    pub fn document(&self, path: &Path) -> Result<LoadedDocument> {
+        let path = std::fs::canonicalize(path)?;
+        let stored = self
             .connection
             .query_row(
-                "SELECT id, path FROM documents WHERE id=?2 OR path=?1
-                    ORDER BY (id=?2) DESC LIMIT 1",
-                params![record.path.to_string_lossy(), id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                &format!("SELECT {DOCUMENT_COLUMNS} FROM documents WHERE path=?1"),
+                [path.to_string_lossy()],
+                StoredRow::read,
             )
-            .optional()?)
+            .optional()?;
+        match stored {
+            Some(row) => row.decode(),
+            None => Ok(LoadedDocument {
+                record: DocumentRecord::new(path)?,
+                repair: None,
+            }),
+        }
+    }
+
+    pub fn recents(&self) -> Result<Vec<DocumentRecord>> {
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT {DOCUMENT_COLUMNS} FROM documents WHERE hidden=0
+                ORDER BY last_opened DESC LIMIT 30"
+        ))?;
+        let rows = statement.query_map([], StoredRow::read)?;
+        rows.map(|row| Ok(row?.decode()?.record)).collect()
+    }
+
+    /// The stored identity a record belongs to: its id if that is stored,
+    /// otherwise whichever document is stored at its path.
+    pub fn resolve(&self, record: &DocumentRecord) -> Result<Option<Identity>> {
+        resolve(&self.connection, record)
+    }
+
+    /// Store a record under its own id and restore it to recents.
+    pub fn save(&self, record: &DocumentRecord) -> Result<()> {
+        upsert(&self.connection, record)
+    }
+
+    /// Save a session under the identity it resolves to. The stored id and
+    /// path win; the session's position and appearance win.
+    pub fn save_session(&mut self, session: &DocumentRecord) -> Result<Identity> {
+        let transaction = self.write()?;
+        let mut record = session.clone();
+        if let Some(identity) = resolve(&transaction, session)? {
+            record.id = identity.id;
+            record.path = identity.path;
+        }
+        upsert(&transaction, &record)?;
+        transaction.commit()?;
+        Ok(Identity::of(&record))
     }
 
     pub fn notebook(&self, record: &DocumentRecord) -> Result<Notebook> {
-        let Some((id, _)) = self.stored_identity(record)? else {
-            return Ok(Notebook::default());
-        };
-        let json: Option<String> = self
-            .connection
-            .query_row(
-                "SELECT payload FROM notebooks WHERE document_id=?1",
-                [id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let notebook: Notebook = json
-            .map(|json| serde_json::from_str(&json))
-            .transpose()?
-            .unwrap_or_default();
-        notebook.upgrade()
+        match resolve(&self.connection, record)? {
+            Some(identity) => stored_notebook(&self.connection, &identity.id),
+            None => Ok(Notebook::default()),
+        }
     }
 
-    /// Notebook retries must not resurrect a removed recent or overwrite newer
-    /// reading progress. Only create a document when its identity is unknown.
-    pub(crate) fn save_notebook(
-        &self,
+    /// Save the notebook of the document a record resolves to. A document is
+    /// created only when its identity is unknown, so a retry can neither
+    /// restore a removed recent nor overwrite newer reading progress. A stored
+    /// notebook that is unreadable or newer is never replaced.
+    pub fn save_notebook(
+        &mut self,
         record: &DocumentRecord,
         notebook: &Notebook,
-    ) -> Result<DocumentRecord> {
+    ) -> Result<Identity> {
         notebook.validate()?;
-        let transaction = self.connection.unchecked_transaction()?;
-        self.notebook(record)?; // Never replace an unreadable/newer payload.
-        let mut saved = record.clone();
-        if let Some((id, path)) = self.stored_identity(record)? {
-            saved.id = id;
-            saved.path = path.into();
-        } else {
-            self.save(&saved)?;
-        }
-        self.connection.execute(
+        let transaction = self.write()?;
+        let identity = match resolve(&transaction, record)? {
+            Some(identity) => identity,
+            None => {
+                upsert(&transaction, record)?;
+                Identity::of(record)
+            }
+        };
+        stored_notebook(&transaction, &identity.id)?;
+        transaction.execute(
             "INSERT INTO notebooks(document_id,payload) VALUES(?1,?2)
              ON CONFLICT(document_id) DO UPDATE SET payload=excluded.payload",
-            params![saved.id, serde_json::to_string(notebook)?],
+            params![identity.id, serde_json::to_string(notebook)?],
         )?;
         transaction.commit()?;
-        self.session_ids
-            .borrow_mut()
-            .insert(record.id.clone(), saved.id.clone());
-        Ok(saved)
+        Ok(identity)
     }
+
     pub fn hide(&self, id: &str) -> Result<()> {
         self.connection
             .execute("UPDATE documents SET hidden=1 WHERE id=?1", [id])?;
         Ok(())
     }
+
+    /// Bookmarks in creation order. `created_at` has one-second resolution;
+    /// the rowid orders bookmarks created within the same second.
     pub fn bookmarks(&self, id: &str) -> Result<Vec<Bookmark>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT payload FROM bookmarks WHERE document_id=?1 ORDER BY created_at,id")?;
+        let mut statement = self.connection.prepare(
+            "SELECT payload FROM bookmarks WHERE document_id=?1 ORDER BY created_at, rowid",
+        )?;
         let rows = statement.query_map([id], |r| r.get::<_, String>(0))?;
         rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
     }
+
     pub fn add_bookmark(&self, bookmark: &Bookmark) -> Result<()> {
         bookmark.locator.validate()?;
         self.connection.execute(
@@ -237,57 +248,254 @@ impl Store {
         )?;
         Ok(())
     }
+
     pub fn remove_bookmark(&self, id: &str) -> Result<()> {
         self.connection
             .execute("DELETE FROM bookmarks WHERE id=?1", [id])?;
         Ok(())
     }
-    pub fn relink(&self, id: &str, path: &Path) -> Result<DocumentRecord> {
-        self.relink_sessions(id, path, &[])
-            .map(|(record, _)| record)
-    }
-    /// Bind retained provisional sessions while the old path still identifies
-    /// the document. Keep these aliases for queued retries in this worker.
-    pub fn relink_sessions(
-        &self,
+
+    /// Locate: reconnect document `id` to the file at `path`.
+    ///
+    /// If another stored document already owns `path`, because the reader
+    /// opened the file from its new place first, it is a duplicate. It is
+    /// merged in when it holds nothing the reader created: no bookmarks and no
+    /// notebook content. `drafts` are other documents' retained notebook drafts
+    /// with content; one for the file at `path` also prevents merging.
+    ///
+    /// `sessions` are retained snapshots that have not been saved. Those for
+    /// this document, the duplicate, or the file at `path` are resolved here
+    /// and returned in `Relinked::sessions`. The most recently opened progress
+    /// wins, whether stored, the duplicate's, or retained; a retained snapshot
+    /// wins a tie because it is the unsaved state of that same session.
+    pub(crate) fn relink(
+        &mut self,
         id: &str,
         path: &Path,
         sessions: &[DocumentRecord],
-    ) -> Result<(DocumentRecord, Vec<String>)> {
-        let transaction = self.connection.unchecked_transaction()?;
-        let json: String =
-            self.connection
-                .query_row("SELECT payload FROM documents WHERE id=?1", [id], |r| {
-                    r.get(0)
-                })?;
-        let mut record: DocumentRecord = serde_json::from_str(&json)?;
-        let path = std::fs::canonicalize(path)?;
-        if Format::from_path(&path)? != record.format {
+        drafts: &[DocumentRecord],
+    ) -> Result<Relinked> {
+        let target = std::fs::canonicalize(path)?;
+        let transaction = self.write()?;
+        let mut record = transaction
+            .query_row(
+                &format!("SELECT {DOCUMENT_COLUMNS} FROM documents WHERE id=?1"),
+                [id],
+                StoredRow::read,
+            )
+            .optional()?
+            .ok_or_else(|| Error::Invalid("This document is no longer in your library.".into()))?
+            .decode()?
+            .record;
+        if Format::from_path(&target)? != record.format {
             return Err(Error::Invalid(
                 "Choose a document of the same format.".into(),
             ));
         }
-        let sessions = sessions
+        let duplicate = transaction
+            .query_row(
+                &format!("SELECT {DOCUMENT_COLUMNS} FROM documents WHERE path=?1 AND id<>?2"),
+                params![target.to_string_lossy(), id],
+                StoredRow::read,
+            )
+            .optional()?
+            .map(|row| row.decode().map(|loaded| loaded.record))
+            .transpose()?;
+        let mut created = drafts.iter().any(|draft| draft.path == target);
+        if let Some(duplicate) = &duplicate {
+            created = created
+                || transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM bookmarks WHERE document_id=?1)",
+                    [&duplicate.id],
+                    |row| row.get(0),
+                )?
+                // An unreadable notebook counts as the reader's content.
+                || stored_notebook(&transaction, &duplicate.id)
+                    .map_or(true, |notebook| notebook.has_content());
+        }
+        if created {
+            return Err(Error::Invalid(
+                "This file is already in your library as a separate document with its own bookmarks or notebook, so Locate can’t combine them. Open the file directly to continue reading that document."
+                    .into(),
+            ));
+        }
+        if let Some(duplicate) = &duplicate {
+            transaction.execute(
+                "DELETE FROM notebooks WHERE document_id=?1",
+                [&duplicate.id],
+            )?;
+            transaction.execute("DELETE FROM documents WHERE id=?1", [&duplicate.id])?;
+            if duplicate.locator.is_some() && duplicate.last_opened > record.last_opened {
+                adopt_progress(&mut record, duplicate);
+            }
+        }
+        let merged: Vec<&DocumentRecord> = sessions
             .iter()
-            .filter(|session| session.id == id || session.path == record.path)
-            .collect::<Vec<_>>();
-        if let Some(session) = sessions.last() {
-            record.locator = session.locator.clone();
-            record.settings = session.settings.clone();
-            record.revision = session.revision.clone();
-            record.last_opened = session.last_opened;
+            .filter(|session| {
+                session.id == record.id
+                    || session.path == record.path
+                    || session.path == target
+                    || duplicate.as_ref().is_some_and(|d| session.id == d.id)
+            })
+            .collect();
+        if let Some(newest) = merged.iter().max_by_key(|session| session.last_opened)
+            && newest.last_opened >= record.last_opened
+        {
+            adopt_progress(&mut record, newest);
         }
-        record.path = path;
-        self.save(&record)?;
+        record.path = target;
+        upsert(&transaction, &record)?;
         transaction.commit()?;
-        let session_ids = sessions.iter().map(|session| session.id.clone()).collect();
-        for session in sessions {
-            self.session_ids
-                .borrow_mut()
-                .insert(session.id.clone(), id.to_owned());
-        }
-        Ok((record, session_ids))
+        Ok(Relinked {
+            sessions: merged.iter().map(|session| session.id.clone()).collect(),
+            absorbed: duplicate.map(|duplicate| duplicate.id),
+            record,
+        })
     }
+
+    /// Writes take the database lock up front, so a read inside the
+    /// transaction cannot be invalidated before its dependent write.
+    fn write(&mut self) -> Result<Transaction<'_>> {
+        Ok(self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?)
+    }
+}
+
+/// Notebook text and quotations share this database. Restrict the directory
+/// (including SQLite's auxiliary files) and the database before SQLite can
+/// initialize, migrate, or recover them. Permission failures abort opening.
+fn restrict_permissions(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        let mut directory = std::fs::DirBuilder::new();
+        directory.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            directory.mode(0o700);
+        }
+        directory.create(parent)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+/// A `documents` row before its payload is decoded.
+struct StoredRow {
+    id: String,
+    path: String,
+    payload: String,
+    last_opened: i64,
+}
+impl StoredRow {
+    fn read(row: &Row) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get(0)?,
+            path: row.get(1)?,
+            payload: row.get(2)?,
+            last_opened: row.get(3)?,
+        })
+    }
+
+    /// The columns are authoritative for identity. An unreadable payload
+    /// loses only reconstructible reading state, never the identity that
+    /// bookmarks and the notebook belong to.
+    fn decode(self) -> Result<LoadedDocument> {
+        let path = PathBuf::from(self.path);
+        let (mut record, repair) = match serde_json::from_str::<DocumentRecord>(&self.payload) {
+            Ok(mut record) => {
+                record.settings.normalize();
+                let invalid = record.locator.as_ref().and_then(|l| l.validate().err());
+                if invalid.is_some() {
+                    record.locator = None;
+                }
+                (
+                    record,
+                    invalid.map(|error| Repair::Position(error.to_string())),
+                )
+            }
+            Err(error) => (
+                DocumentRecord::new(path.clone())?,
+                Some(Repair::Record(error.to_string())),
+            ),
+        };
+        record.id = self.id;
+        record.path = path;
+        record.last_opened = self.last_opened;
+        Ok(LoadedDocument { record, repair })
+    }
+}
+
+fn resolve(connection: &Connection, record: &DocumentRecord) -> Result<Option<Identity>> {
+    Ok(connection
+        .query_row(
+            "SELECT id, path FROM documents WHERE id=?1 OR path=?2
+                ORDER BY (id=?1) DESC LIMIT 1",
+            params![record.id, record.path.to_string_lossy()],
+            |row| {
+                Ok(Identity {
+                    id: row.get(0)?,
+                    path: PathBuf::from(row.get::<_, String>(1)?),
+                })
+            },
+        )
+        .optional()?)
+}
+
+fn upsert(connection: &Connection, record: &DocumentRecord) -> Result<()> {
+    if let Some(locator) = &record.locator {
+        locator.validate()?;
+    }
+    connection.execute(
+        "INSERT INTO documents(id,path,payload,last_opened) VALUES(?1,?2,?3,?4)
+            ON CONFLICT(id) DO UPDATE SET path=excluded.path, payload=excluded.payload,
+                last_opened=excluded.last_opened, hidden=0",
+        params![
+            record.id,
+            record.path.to_string_lossy(),
+            serde_json::to_string(record)?,
+            record.last_opened
+        ],
+    )?;
+    Ok(())
+}
+
+fn stored_notebook(connection: &Connection, id: &str) -> Result<Notebook> {
+    let json: Option<String> = connection
+        .query_row(
+            "SELECT payload FROM notebooks WHERE document_id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    json.map(|json| serde_json::from_str::<Notebook>(&json))
+        .transpose()?
+        .unwrap_or_default()
+        .upgrade()
+}
+
+/// Take another snapshot's reading progress, keeping this record's identity.
+fn adopt_progress(record: &mut DocumentRecord, newer: &DocumentRecord) {
+    record.locator = newer.locator.clone();
+    record.settings = newer.settings.clone();
+    record.revision = newer.revision.clone();
+    record.last_opened = newer.last_opened;
 }
 
 #[cfg(test)]
@@ -324,8 +532,8 @@ mod tests {
         std::fs::write(&source, "# A book").unwrap();
         let app = temp.path().join("readero");
         let database = app.join("reading.sqlite3");
-        let store = Store::open(&database).unwrap();
-        let record = store.document(&source).unwrap();
+        let mut store = Store::open(&database).unwrap();
+        let record = store.document(&source).unwrap().record;
         let notebook = Notebook {
             text: "Private notebook text".into(),
             ..Notebook::default()
@@ -353,7 +561,7 @@ mod tests {
         std::fs::write(&source, "# A book").unwrap();
         let path = temp.path().join("state.sqlite3");
         let store = Store::open(&path).unwrap();
-        let mut record = store.document(&source).unwrap();
+        let mut record = store.document(&source).unwrap().record;
         record.locator = Some(Locator {
             version: 1,
             anchor: Anchor::Reflow {
@@ -379,11 +587,21 @@ mod tests {
         assert!(store.recents().unwrap().is_empty());
         assert_eq!(store.bookmarks(&record.id).unwrap().len(), 1);
         drop(store);
-        let reopened = Store::open(&path).unwrap();
-        assert_eq!(reopened.document(&source).unwrap().locator, record.locator);
+        let mut reopened = Store::open(&path).unwrap();
+        assert_eq!(
+            reopened.document(&source).unwrap().record.locator,
+            record.locator
+        );
         let moved = temp.path().join("renamed.md");
         std::fs::rename(source, &moved).unwrap();
-        assert_eq!(reopened.relink(&record.id, &moved).unwrap().id, record.id);
+        assert_eq!(
+            reopened
+                .relink(&record.id, &moved, &[], &[])
+                .unwrap()
+                .record
+                .id,
+            record.id
+        );
     }
     #[test]
     fn temporary_lock_reconnects_identity_without_losing_session_progress() {
@@ -391,12 +609,12 @@ mod tests {
         let source = temp.path().join("book.md");
         std::fs::write(&source, "# A book").unwrap();
         let path = temp.path().join("state.sqlite3");
-        let store = Store::open(&path).unwrap();
+        let mut store = Store::open(&path).unwrap();
         store
             .connection
             .busy_timeout(Duration::from_millis(20))
             .unwrap();
-        let original = store.document(&source).unwrap();
+        let original = store.document(&source).unwrap().record;
         store.save(&original).unwrap();
         let bookmark = Bookmark {
             id: "existing-bookmark".into(),
@@ -431,14 +649,14 @@ mod tests {
         session.revision = "current-session-revision".into();
         assert!(store.save_session(&session).is_err());
         locked.execute_batch("ROLLBACK").unwrap();
-        let recovered_id = store.save_session(&session).unwrap();
+        let recovered_id = store.save_session(&session).unwrap().id;
         assert_eq!(recovered_id, original.id);
-        let recovered = store.document(&source).unwrap();
+        let recovered = store.document(&source).unwrap().record;
         assert_eq!(recovered.locator, session.locator);
         assert_eq!(recovered.settings, session.settings);
         assert_eq!(recovered.revision, session.revision);
         // A second save may already be queued with the provisional ID.
-        assert_eq!(store.save_session(&session).unwrap(), original.id);
+        assert_eq!(store.save_session(&session).unwrap().id, original.id);
         store
             .add_bookmark(&Bookmark {
                 id: "new-bookmark".into(),
@@ -457,12 +675,12 @@ mod tests {
         let moved = temp.path().join("moved.md");
         std::fs::write(&source, "# A book").unwrap();
         let database = temp.path().join("state.sqlite3");
-        let store = Store::open(&database).unwrap();
+        let mut store = Store::open(&database).unwrap();
         store
             .connection
             .busy_timeout(Duration::from_millis(20))
             .unwrap();
-        let mut snapshot = store.document(&source).unwrap();
+        let mut snapshot = store.document(&source).unwrap().record;
         store.save(&snapshot).unwrap();
         let locator = Locator {
             version: 1,
@@ -492,102 +710,21 @@ mod tests {
         assert!(store.save_session(&snapshot).is_err());
         locked.execute_batch("ROLLBACK").unwrap();
         std::fs::rename(&source, &moved).unwrap();
-        store.relink(&snapshot.id, &moved).unwrap();
+        store.relink(&snapshot.id, &moved, &[], &[]).unwrap();
 
         // The old path may even belong to another document by retry time.
         std::fs::write(&source, "# Another book").unwrap();
-        let other = store.document(&source).unwrap();
+        let other = store.document(&source).unwrap().record;
         store.save(&other).unwrap();
         for _ in 0..2 {
-            assert_eq!(store.save_session(&snapshot).unwrap(), snapshot.id);
-            let recovered = store.document(&moved).unwrap();
+            assert_eq!(store.save_session(&snapshot).unwrap().id, snapshot.id);
+            let recovered = store.document(&moved).unwrap().record;
             assert_eq!(recovered.id, snapshot.id);
             assert_eq!(recovered.path, std::fs::canonicalize(&moved).unwrap());
             assert_eq!(recovered.locator, snapshot.locator);
             assert_eq!(recovered.settings, snapshot.settings);
             assert_eq!(store.bookmarks(&recovered.id).unwrap().len(), 1);
-            assert_eq!(store.document(&source).unwrap().id, other.id);
-        }
-    }
-
-    #[test]
-    fn provisional_retry_follows_relink_even_when_old_path_is_reused() {
-        for reuse in [false, true] {
-            let temp = tempfile::tempdir().unwrap();
-            let source = temp.path().join("book.md");
-            let moved = temp.path().join("moved.md");
-            std::fs::write(&source, "# A book").unwrap();
-            let database = temp.path().join("state.sqlite3");
-            let store = Store::open(&database).unwrap();
-            store
-                .connection
-                .busy_timeout(Duration::from_millis(20))
-                .unwrap();
-            let original = store.document(&source).unwrap();
-            store.save(&original).unwrap();
-            let locked = Connection::open(&database).unwrap();
-            locked.execute_batch("BEGIN EXCLUSIVE").unwrap();
-            assert!(store.document(&source).is_err());
-            let mut snapshot = DocumentRecord::new(source.clone()).unwrap();
-            snapshot.settings.font_size = 25.0;
-            snapshot.locator = Some(Locator {
-                version: 1,
-                anchor: Anchor::Pdf {
-                    page: 5,
-                    x: 0.0,
-                    y: 0.0,
-                    viewport_y: 0.0,
-                },
-            });
-            assert!(store.save_session(&snapshot).is_err());
-            locked.execute_batch("ROLLBACK").unwrap();
-            std::fs::rename(&source, &moved).unwrap();
-            store
-                .add_bookmark(&Bookmark {
-                    id: "original-bookmark".into(),
-                    document_id: original.id.clone(),
-                    label: "Saved passage".into(),
-                    locator: snapshot.locator.clone().unwrap(),
-                })
-                .unwrap();
-            // A rejected relocation must leave storage and retry identity alone.
-            assert!(
-                store
-                    .relink_sessions(
-                        &original.id,
-                        &temp.path().join("missing.md"),
-                        &[snapshot.clone()]
-                    )
-                    .is_err()
-            );
-            assert!(store.session_ids.borrow().is_empty());
-            store
-                .relink_sessions(&original.id, &moved, &[snapshot.clone()])
-                .unwrap();
-            assert_eq!(store.document(&moved).unwrap().locator, snapshot.locator);
-            let other = if reuse {
-                std::fs::write(&source, "# Another book").unwrap();
-                let other = store.document(&source).unwrap();
-                store.save(&other).unwrap();
-                Some(other)
-            } else {
-                None
-            };
-            for _ in 0..2 {
-                assert_eq!(store.save_session(&snapshot).unwrap(), original.id);
-                let recovered = store.document(&moved).unwrap();
-                assert_eq!(recovered.locator, snapshot.locator);
-                assert_eq!(recovered.settings, snapshot.settings);
-                assert_eq!(store.bookmarks(&recovered.id).unwrap().len(), 1);
-                assert_eq!(recovered.path, moved);
-                assert_eq!(store.recents().unwrap().len(), if reuse { 2 } else { 1 });
-                if let Some(other) = &other {
-                    let unchanged = store.document(&source).unwrap();
-                    assert_eq!(unchanged.id, other.id);
-                    assert_eq!(unchanged.locator, other.locator);
-                    assert_eq!(unchanged.settings, other.settings);
-                }
-            }
+            assert_eq!(store.document(&source).unwrap().record.id, other.id);
         }
     }
 
