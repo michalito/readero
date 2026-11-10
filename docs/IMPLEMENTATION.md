@@ -2,6 +2,102 @@
 
 Updated 10 November 2026 · Readero 0.1.1 personal preview
 
+## Publication pipeline review · 10 November 2026
+
+This review covers how an EPUB or Markdown file becomes the resources the
+reader loads. `markdown.rs` now owns the whole synthetic publication that
+Markdown is read through: its content, outline, container and package
+documents, their names, and the address of a heading. `resource.rs` keeps what
+needs the file system: bounded reads, archive inspection and the folder that
+sidecars load from. Its representation is private. Opening is no longer one
+function that inspected archives and assembled package XML inline, and
+rendering is no longer one loop that mixed block identity, headings and link
+policy.
+
+The restructuring changed no block identity, heading fragment or revision,
+because saved positions, bookmarks and quotations name them. The restructured
+renderer and the previous one produced identical documents for the Markdown
+files in this repository and an edge-case set, and the independent review
+repeated the comparison over several thousand generated inputs.
+
+Each defect below was reproduced before it was fixed. Those that involve the
+reader were reproduced in the unmodified reader script under WebKitGTK 6:
+
+- A byte-order mark turned the first heading into literal text.
+- Front matter rendered as a rule and a heading, and entered the outline. It
+  is now hidden when the file opens with a `---` line, the next line is a
+  `key:` line, and every line after it up to a closing `---` or `...` is a
+  `key:` line, a list item or an indented line. Any other line leaves the
+  block to be read as Markdown, because hiding prose is worse than showing
+  metadata. That deliberately leaves some valid YAML visible: blank lines,
+  comments, quoted keys, keys with spaces and flow mappings. A file that opens
+  with a rule, only such lines and another rule is read as front matter, as
+  other Markdown tools read it.
+- The outline was flat. It now nests by heading level, headings without text
+  no longer appear as "Untitled", and a heading written across two lines keeps
+  the space between them in the outline.
+- HTML comments were displayed. A well-formed comment standing alone is hidden,
+  as a block or within a line; whatever surrounds it, such as a quotation or a
+  list item, is rendered as it would be around nothing. Other raw HTML is still
+  shown as text. So is a comment that is never closed, since it runs to the end
+  of the file, and one a browser would end early, such as `<!-->`.
+- A link to a heading in another Markdown file opened that file at its start
+  when the heading held non-ASCII text: the fragment was passed on
+  percent-encoded.
+- An image above the document's folder, such as `../figure.png`, displayed a
+  different file of that name inside the folder. It is now refused like any
+  other image outside the folder, judged by the URL rules the reader resolves
+  it with, on the destination as it is written into the document.
+- An unreadable Markdown file was reported as not being valid UTF-8.
+- A pipe among the sidecars blocked the worker that serves resources while it
+  held the publication. Sidecars are now opened without waiting and judged by
+  the opened file instead of its name. The independent review showed that the
+  name could otherwise be pointed elsewhere between the check and the open.
+
+Two things were removed. Nothing read the `data-source-*` attributes on each
+block. The 2000:1 expansion check on EPUB entries could not fire for the stored
+and deflated entries the reader accepts, and an archive can understate a size
+in any case; the limit that holds is the bounded read, which a test now pins
+with a falsified header. Generated resources are now listed in a fixed order
+instead of hash order. `libc` becomes a direct dependency for one open flag; it
+was already part of the build.
+
+Hiding front matter and comments moves the content that follows them, while
+the revision deliberately stays the hash of the file so that existing documents
+are not treated as edited. Positions and quotations captured against the
+previous rendering were restored in the new one, in Scroll and Pages. A
+position in the body restored without a notice through its block identity, and
+a quotation through its surrounding text. The exceptions are narrow:
+
+- A position saved on text that is now hidden, such as the top of a file with
+  front matter, restores at the nearest passage with the usual one-time notice
+  that the document changed.
+- A saved quotation within 128 characters of hidden text carries that text in
+  its stored context and asks to be relinked.
+- Hidden front matter no longer counts toward identities. A later block
+  identical to what it used to render, or a later heading with the same words,
+  moves up one occurrence, so a fragment such as `title-1` becomes `title`.
+- A file that shows nothing is reported as empty. That now includes a file
+  holding only front matter, comments or link definitions; the last of these
+  used to open as a blank page.
+- A file with a byte-order mark is parsed from its first line as it would be
+  without the mark, which can change the identities of its opening blocks and
+  lets its first heading claim its fragment.
+
+Heading fragments are otherwise untouched. A heading written across two lines
+keeps the fragment it had, without the space, so that no existing link changes.
+
+The core suite passes with 84 tests. Eighteen are new; three of the four new
+resource tests fail against the previous code, and the fourth pins the read
+limit that already held. A generated set of 600,000 sources, built from rules,
+keys, comments in every malformed shape and mixed line endings, lost no word
+of prose that the previous renderer showed. Formatting and strict Clippy pass for all targets with
+the smoke feature. The desktop executable was type-checked only, and its one
+change is `related()` asking `markdown.rs` for a heading's address. The WebKit
+checks served the generated publication to `assets/reader.js` through a
+temporary harness outside the repository; the native smoke flows were not run
+for this change.
+
 ## Reading-state persistence review · 10 November 2026
 
 The SQLite store is now a stateless repository. The reading-state worker owns
@@ -386,8 +482,8 @@ The [PRD](MVP_PRD.md) remains the acceptance baseline. This preview is ready for
 - `desktop/shell/opening.rs` owns candidate preparation, native readiness and cancellation, history/link requests, source watching, deferred reloads, and Home/Close transitions. Active reading state remains saveable until a replacement is ready; candidate failure retains the working reader. Its private state replaces the standalone save gate and caller-managed pending fields.
 - `reading_state.rs` owns save retries, provisional identity reconciliation, Locate, recents removal, and bookmark-save ordering on one worker. It holds the only session-to-identity map and reconciles every record before it reaches the store. Operations enter its queue before their replies are awaited, and retained snapshots are independent of reply delivery. The shell supplies stable positions, debounce timers, and presentation; it reads the latest save status instead of replaying status from delayed replies.
 - `state.rs` owns schema v3 and the SQLite implementation: a stateless repository for transactional record updates, notebooks, bookmarks, recents, and relinking. Identity resolves from stored data only (an id match beats a path match, and the stored path wins); columns are authoritative over the JSON payload. Reading state uses this implementation directly, including real temporary SQLite databases in its tests.
-- `resource.rs` validates archive/resource limits and serves only capability-scoped resources. Markdown sidecars resolve within the source directory after canonicalization; EPUBs are not extracted to disk.
-- `markdown.rs` renders the defined dialect and creates stable content-block IDs with source offsets.
+- `resource.rs` validates archive/resource limits and serves only capability-scoped resources. Every file read is bounded regardless of the size an archive declares. Markdown sidecars resolve within the source directory after canonicalization and must be regular files, judged by the opened file; EPUBs are not extracted to disk.
+- `markdown.rs` renders the defined dialect and owns the synthetic publication it is read through: content with stable content-block IDs, a nested outline, the package documents, and heading addresses.
 - `desktop/pdf.rs` adapts Papers models, native page coordinates, async loading, search, and settled restoration.
 - `desktop/reflow.rs` owns WebKit setup, local resource delivery, lifecycle cancellation, and typed messages. The native bridge exists only in a named script world.
 - `desktop/shell.rs` coordinates a single active document; controls, home, navigation, and persistence live in separate modules.

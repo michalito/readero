@@ -917,7 +917,7 @@ impl Shell {
                 self.open_document(Request {
                     href: href
                         .split_once('#')
-                        .map(|(_, fragment)| format!("content.xhtml#{fragment}")),
+                        .map(|(_, fragment)| readero::markdown::heading_href(fragment)),
                     history: Some((back, Vec::new())),
                     ..Request::file(path)
                 });
